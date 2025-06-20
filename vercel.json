@@ -1,12 +1,8 @@
 {
-  "builds": [
-    {
-      "src": "api/bot.py",
-      "use": "@vercel/python",
-      "config": { "build": "bash build.sh" }
-    }
-  ],
   "rewrites": [
-    { "source": "/(.*)", "destination": "/api/bot.py" }
+    {
+      "source": "/(.*)",
+      "destination": "/api/bot.py"
+    }
   ]
 }
