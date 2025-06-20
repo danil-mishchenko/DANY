@@ -2,6 +2,7 @@
 import os
 import json
 import requests
+import io
 import openai
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler
