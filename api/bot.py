@@ -2,6 +2,7 @@
 import os
 import json
 import requests
+import openai
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler
 from google.oauth2 import service_account
