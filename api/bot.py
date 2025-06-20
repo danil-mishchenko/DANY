@@ -7,6 +7,17 @@ from http.server import BaseHTTPRequestHandler
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
+CATEGORY_EMOJI_MAP = {
+    "Задача": "✅",
+    "Встреча": "🤝",
+    "Идея": "💡",
+    "Покупка": "🛒",
+    "Мысль": "🤔",
+    "Ссылка": "🔗",
+    "Цитата": "💬",
+    "Быстрая заметка": "📄" # На случай, если категория не определена
+}
+
 # --- Секретные ключи, ID и твой личный пропуск ---
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 NOTION_TOKEN = os.getenv('NOTION_TOKEN')
@@ -62,58 +73,73 @@ def process_with_deepseek(text: str) -> dict:
     return response.json()['choices'][0]['message']['content']
 
 def create_notion_page(title: str, content: str, category: str):
-    """Создает новую страницу в базе данных Notion."""
-    # ... (код этой функции не меняется, можно скопировать из предыдущего ответа)
+    """Создает новую страницу в базе данных Notion с иконкой."""
     url = 'https://api.notion.com/v1/pages'
-    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
-    properties = {'Name': {'title': [{'type': 'text', 'text': {'content': title}}]}, 'Категория': {'select': {'name': category}}}
+    headers = {
+        'Authorization': f'Bearer {NOTION_TOKEN}',
+        'Content-Type': 'application/json',
+        'Notion-Version': '2022-06-28'
+    }
+    
+    # Выбираем эмодзи из нашей карты. Если категория новая, ставим эмодзи по умолчанию.
+    page_icon = CATEGORY_EMOJI_MAP.get(category, "📄")
+
+    properties = {
+        'Name': {'title': [{'type': 'text', 'text': {'content': title}}]},
+        'Категория': {'select': {'name': category}}
+    }
+    
     children = []
     if content:
         children.append({"object": "block", "type": "paragraph", "paragraph": {"rich_text": [{"type": "text", "text": {"content": content}}]}})
-    payload = {'parent': {'database_id': NOTION_DATABASE_ID}, 'properties': properties, 'children': children}
+    
+    payload = {
+        'parent': {'database_id': NOTION_DATABASE_ID},
+        'icon': {'type': 'emoji', 'emoji': page_icon}, # <--- ДОБАВИЛИ ИКОНКУ
+        'properties': properties,
+        'children': children
+    }
+    
     response = requests.post(url, headers=headers, json=payload)
     response.raise_for_status()
-    print("Страница в Notion успешно создана.")
-
+    print("Страница в Notion успешно создана с иконкой.")
+    
 def create_google_calendar_event(title: str, description: str, start_time_iso: str):
-    """Создает новое событие в Google Календаре, указанном в переменных окружения."""
+    """Создает новое событие в Google Календаре с уведомлением."""
     try:
-        # 1. Получаем креды для доступа
+        # ... (код для creds и service не меняется)
         creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
         creds = service_account.Credentials.from_service_account_info(creds_info)
         service = build('calendar', 'v3', credentials=creds)
         
-        # 2. Получаем ID нужного календаря из переменных окружения
         calendar_id_to_use = os.getenv('GOOGLE_CALENDAR_ID')
-
-        # 3. Подготавливаем данные о времени события
         start_time = datetime.fromisoformat(start_time_iso)
         end_time = start_time + timedelta(hours=1)
 
-        # 4. Собираем тело запроса для API
         event = {
             'summary': title,
             'description': description,
-            'start': {
-                'dateTime': start_time.isoformat(),
-                'timeZone': 'Europe/Kyiv',
+            'start': {'dateTime': start_time.isoformat(), 'timeZone': 'Europe/Kyiv'},
+            'end': {'dateTime': end_time.isoformat(), 'timeZone': 'Europe/Kyiv'},
+            # --- ДОБАВЛЯЕМ БЛОК С УВЕДОМЛЕНИЕМ ---
+            'reminders': {
+                'useDefault': False, # Не использовать стандартные настройки календаря
+                'overrides': [
+                    # Добавляем всплывающее уведомление за 15 минут
+                    {'method': 'popup', 'minutes': 15},
+                ],
             },
-            'end': {
-                'dateTime': end_time.isoformat(),
-                'timeZone': 'Europe/Kyiv',
-            },
+            # -----------------------------------------
         }
 
-        # 5. Отправляем запрос в Google API с УКАЗАНИЕМ КОНКРЕТНОГО КАЛЕНДАРЯ
         service.events().insert(calendarId=calendar_id_to_use, body=event).execute()
         
-        print("Событие в Google Calendar успешно создано.")
+        print("Событие в Google Calendar успешно создано с уведомлением.")
         return True
-        
     except Exception as e:
         print(f"Ошибка при создании события в Google Calendar: {e}")
         return False
-
+        
 # --- Основной обработчик с "Фейс-контролем" ---
 
 class handler(BaseHTTPRequestHandler):
