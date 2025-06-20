@@ -118,6 +118,8 @@ def create_google_calendar_event(title: str, description: str, start_time_iso: s
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
+        # Определяем chat_id в самом начале, чтобы можно было отправлять сообщения об ошибках
+        chat_id = None
         try:
             content_length = int(self.headers['Content-Length'])
             body = self.rfile.read(content_length)
@@ -128,16 +130,11 @@ class handler(BaseHTTPRequestHandler):
 
             message = update['message']
             user_id = str(message['from']['id'])
+            chat_id = message['chat']['id']  # <--- Получаем ID чата для ответа
 
-            # =======================================================
-            #           ⚡️ ГЛАВНАЯ ПРОВЕРКА БЕЗОПАСНОСТИ ⚡️
-            # =======================================================
             if user_id != ALLOWED_TELEGRAM_ID:
                 print(f"ОТКАЗ В ДОСТУПЕ: Попытка использования от юзера {user_id}")
-                self.send_response(200) # Тихо игнорируем, отвечая Telegram "OK"
-                self.end_headers()
-                return # Прекращаем выполнение
-            # =======================================================
+                self.send_response(200); self.end_headers(); return
 
             if 'text' in message:
                 text_to_process = message['text']
@@ -150,18 +147,46 @@ class handler(BaseHTTPRequestHandler):
                 category = ai_data.get('category', 'Мысль')
                 event_time_iso = ai_data.get('event_datetime_iso')
 
+                # --- ОТЧЕТ О СОЗДАНИИ ЗАМЕТКИ В NOTION ---
                 try:
                     create_notion_page(title, content, category)
+                    # Формируем красивый отчет и ОТПРАВЛЯЕМ ЕГО
+                    feedback_text = (
+                        f"✅ *Заметка в Notion создана!*\n\n"
+                        f"*Название:* {title}\n"
+                        f"*Категория:* {category}"
+                    )
+                    send_telegram_message(chat_id, feedback_text)
                 except Exception as e:
+                    error_text = f"❌ *Ошибка при создании заметки в Notion:*\n`{e}`"
+                    send_telegram_message(chat_id, error_text)
                     print(f"Ошибка при создании страницы в Notion: {e}")
 
+                # --- ОТЧЕТ О СОЗДАНИИ СОБЫТИЯ В КАЛЕНДАРЕ ---
                 if event_time_iso:
                     try:
                         create_google_calendar_event(title, content, event_time_iso)
+                        
+                        # Форматируем дату для красивого вывода
+                        dt_object = datetime.fromisoformat(event_time_iso)
+                        months_map = {1: 'января', 2: 'февраля', 3: 'марта', 4: 'апреля', 5: 'мая', 6: 'июня', 7: 'июля', 8: 'августа', 9: 'сентября', 10: 'октября', 11: 'ноября', 12: 'декабря'}
+                        formatted_date = f"{dt_object.day} {months_map[dt_object.month]} {dt_object.year} в {dt_object.strftime('%H:%M')}"
+
+                        feedback_text = (
+                            f"📅 *Событие в Календарь добавлено!*\n\n"
+                            f"*Название:* {title}\n"
+                            f"*Когда:* {formatted_date}"
+                        )
+                        send_telegram_message(chat_id, feedback_text)
                     except Exception as e:
+                        error_text = f"❌ *Ошибка при создании события в Календаре:*\n`{e}`"
+                        send_telegram_message(chat_id, error_text)
                         print(f"Ошибка при создании события в Google Calendar: {e}")
 
         except Exception as e:
+            # Отправляем сообщение об общей ошибке, если у нас есть chat_id
+            if chat_id:
+                send_telegram_message(chat_id, f"🤯 *Произошла глобальная ошибка!*\nПожалуйста, проверьте логи Vercel.\n`{e}`")
             print(f"Произошла глобальная ошибка: {e}")
         
         self.send_response(200)
