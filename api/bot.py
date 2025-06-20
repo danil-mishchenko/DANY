@@ -42,19 +42,36 @@ def download_telegram_file(file_id: str) -> io.BytesIO:
     return io.BytesIO(file_response.content)
 
 def transcribe_audio_with_whisper(audio_file: io.BytesIO) -> str:
-    """Отправляет аудиофайл в OpenAI Whisper для транскрибации."""
-    audio_file.name = "voice.oga"
-    transcription_prompt = "Это личная голосовая заметка. Важно сохранить знаки препинания и четкость формулировок."
+    """Конвертирует аудио из OGG в MP3 и отправляет в OpenAI Whisper."""
+    print("Начинаю конвертацию аудио из OGG в MP3...")
     try:
+        # Шаг 1: Загружаем аудио из формата ogg/opus с помощью pydub
+        audio_file.seek(0) # Переводим курсор в начало файла
+        audio_segment = AudioSegment.from_file(audio_file, format="ogg")
+
+        # Шаг 2: Создаем новый пустой файл в памяти для mp3
+        mp3_audio_io = io.BytesIO()
+
+        # Шаг 3: Экспортируем аудио в формате mp3 в наш файл в памяти
+        audio_segment.export(mp3_audio_io, format="mp3")
+        mp3_audio_io.seek(0) # Переводим курсор в начало нового файла
+        
+        print("Конвертация успешна. Отправляю MP3 в OpenAI...")
+
+        # Шаг 4: Отправляем уже сконвертированный mp3 файл в OpenAI
+        mp3_audio_io.name = "voice.mp3" # Важно дать файлу имя с правильным расширением
+        transcription_prompt = "Это личная голосовая заметка. Важно сохранить знаки препинания и четкость формулировок."
+
         transcript = openai.audio.transcriptions.create(
-            model="gpt-4o-mini-transcribe",  # <--- ИСПОЛЬЗУЕМ ВЕРСИЮ 4o-mini
-            file=audio_file,
+            model="gpt-4o-mini-transcribe",
+            file=mp3_audio_io,
             prompt=transcription_prompt
         )
-        print("Аудио успешно транскрибировано с помощью gpt-4o-mini-transcribe.")
+        print("Аудио успешно транскрибировано.")
         return transcript.text
+        
     except Exception as e:
-        print(f"Ошибка при транскрибации аудио: {e}")
+        print(f"Ошибка при конвертации или транскрибации аудио: {e}")
         return None
         
 def send_telegram_message(chat_id: str, text: str):
