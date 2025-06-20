@@ -5,10 +5,10 @@ import requests
 import io
 import openai
 from datetime import datetime, timedelta
-from pydub import AudioSegment
 from http.server import BaseHTTPRequestHandler
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from pydub import AudioSegment
 
 CATEGORY_EMOJI_MAP = {
     "Задача": "✅",
