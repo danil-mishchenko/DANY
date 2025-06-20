@@ -16,6 +16,22 @@ GOOGLE_CREDENTIALS_JSON = os.getenv('GOOGLE_CREDENTIALS_JSON')
 ALLOWED_TELEGRAM_ID = os.getenv('ALLOWED_TELEGRAM_ID') # Твой личный ID
 
 # --- Функции для работы с API (без Whisper) ---
+# =======================================================
+def send_telegram_message(chat_id: str, text: str):
+    """Отправляет текстовое сообщение пользователю в Telegram."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        'chat_id': chat_id,
+        'text': text,
+        'parse_mode': 'Markdown'  # Включаем форматирование (жирный, курсив)
+    }
+    try:
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        print(f"Сообщение успешно отправлено пользователю {chat_id}")
+    except Exception as e:
+        print(f"Ошибка при отправке сообщения в Telegram: {e}")
+# =======================================================
 
 def process_with_deepseek(text: str) -> dict:
     """Отправляет текст в DeepSeek для анализа, улучшения и извлечения данных."""
