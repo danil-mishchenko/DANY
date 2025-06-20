@@ -2,13 +2,11 @@
 import os
 import json
 import requests
-import io
-import openai
+import time # Импортируем для создания паузы
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from pydub import AudioSegment
 
 AudioSegment.converter = "/var/task/bin/ffmpeg"
 AudioSegment.ffprobe = "/var/task/bin/ffprobe"
@@ -32,6 +30,7 @@ DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 GOOGLE_CREDENTIALS_JSON = os.getenv('GOOGLE_CREDENTIALS_JSON')
 ALLOWED_TELEGRAM_ID = os.getenv('ALLOWED_TELEGRAM_ID') # Твой личный ID
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+ASSEMBLYAI_API_KEY = os.getenv('ASSEMBLYAI_API_KEY') # Новый ключ
 
 openai.api_key = OPENAI_API_KEY
 
@@ -45,38 +44,43 @@ def download_telegram_file(file_id: str) -> io.BytesIO:
     file_response = requests.get(file_url)
     return io.BytesIO(file_response.content)
 
-def transcribe_audio_with_whisper(audio_file: io.BytesIO) -> str:
-    """Конвертирует аудио из OGG в MP3 и отправляет в OpenAI Whisper."""
-    print("Начинаю конвертацию аудио из OGG в MP3...")
-    try:
-        # Шаг 1: Загружаем аудио из формата ogg/opus с помощью pydub
-        audio_file.seek(0) # Переводим курсор в начало файла
-        audio_segment = AudioSegment.from_file(audio_file, format="ogg")
+def transcribe_with_assemblyai(audio_file_bytes) -> str:
+    """Отправляет аудио в AssemblyAI и получает результат."""
+    headers = {'authorization': ASSEMBLYAI_API_KEY}
 
-        # Шаг 2: Создаем новый пустой файл в памяти для mp3
-        mp3_audio_io = io.BytesIO()
+    # 1. Отправляем файл на сервер AssemblyAI
+    upload_response = requests.post(
+        'https://api.assemblyai.com/v2/upload',
+        headers=headers,
+        data=audio_file_bytes
+    )
+    audio_url = upload_response.json()['upload_url']
+    print("Аудиофайл успешно загружен в AssemblyAI.")
 
-        # Шаг 3: Экспортируем аудио в формате mp3 в наш файл в памяти
-        audio_segment.export(mp3_audio_io, format="mp3")
-        mp3_audio_io.seek(0) # Переводим курсор в начало нового файла
-        
-        print("Конвертация успешна. Отправляю MP3 в OpenAI...")
+    # 2. Запускаем задачу транскрибации
+    transcript_request = {'audio_url': audio_url, 'language_code': 'ru'}
+    transcript_response = requests.post(
+        "https://api.assemblyai.com/v2/transcript",
+        json=transcript_request,
+        headers=headers
+    )
+    transcript_id = transcript_response.json()['id']
+    print(f"Задача на транскрибацию создана с ID: {transcript_id}")
 
-        # Шаг 4: Отправляем уже сконвертированный mp3 файл в OpenAI
-        mp3_audio_io.name = "voice.mp3" # Важно дать файлу имя с правильным расширением
-        transcription_prompt = "Это личная голосовая заметка. Важно сохранить знаки препинания и четкость формулировок."
-
-        transcript = openai.audio.transcriptions.create(
-            model="gpt-4o-mini-transcribe",
-            file=mp3_audio_io,
-            prompt=transcription_prompt
+    # 3. Ждем результата (опрашиваем статус каждые пару секунд)
+    while True:
+        polling_response = requests.get(
+            f"https://api.assemblyai.com/v2/transcript/{transcript_id}",
+            headers=headers
         )
-        print("Аудио успешно транскрибировано.")
-        return transcript.text
-        
-    except Exception as e:
-        print(f"Ошибка при конвертации или транскрибации аудио: {e}")
-        return None
+        status = polling_response.json()['status']
+        if status == 'completed':
+            print("Транскрибация завершена.")
+            return polling_response.json()['text']
+        elif status == 'error':
+            print("Ошибка транскрибации в AssemblyAI.")
+            return None
+        time.sleep(2) # Пауза перед следующей проверкой
         
 def send_telegram_message(chat_id: str, text: str):
     """Отправляет текстовое сообщение пользователю в Telegram."""
@@ -215,8 +219,8 @@ class handler(BaseHTTPRequestHandler):
             # Шаг 1: Проверяем, есть ли голосовое сообщение
             if 'voice' in message:
                 print("Получено голосовое сообщение. Начинаю транскрибацию...")
-                audio_file_io = download_telegram_file(message['voice']['file_id'])
-                text_to_process = transcribe_audio_with_whisper(audio_file_io)
+                audio_bytes = download_telegram_file(message['voice']['file_id']).read()
+                text_to_process = transcribe_with_assemblyai(audio_bytes)
                 if not text_to_process:
                     send_telegram_message(chat_id, "❌ Не удалось распознать речь в голосовом сообщении.")
             
