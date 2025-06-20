@@ -60,18 +60,43 @@ def create_notion_page(title: str, content: str, category: str):
     print("Страница в Notion успешно создана.")
 
 def create_google_calendar_event(title: str, description: str, start_time_iso: str):
-    """Создает новое событие в основном Google Календаре."""
-    # ... (код этой функции не меняется, можно скопировать из предыдущего ответа)
-    creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
-    creds = service_account.Credentials.from_service_account_info(creds_info)
-    service = build('calendar', 'v3', credentials=creds)
-    start_time = datetime.fromisoformat(start_time_iso)
-    end_time = start_time + timedelta(hours=1)
-    event = {'summary': title, 'description': description, 'start': {'dateTime': start_time.isoformat(), 'timeZone': 'Europe/Kyiv'}, 'end': {'dateTime': end_time.isoformat(), 'timeZone': 'Europe/Kyiv'}}
-    def create_google_calendar_event(title: str, description: str, start_time_iso: str):
+    """Создает новое событие в Google Календаре, указанном в переменных окружения."""
+    try:
+        # 1. Получаем креды для доступа
+        creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
+        creds = service_account.Credentials.from_service_account_info(creds_info)
+        service = build('calendar', 'v3', credentials=creds)
+        
+        # 2. Получаем ID нужного календаря из переменных окружения
         calendar_id_to_use = os.getenv('GOOGLE_CALENDAR_ID')
+
+        # 3. Подготавливаем данные о времени события
+        start_time = datetime.fromisoformat(start_time_iso)
+        end_time = start_time + timedelta(hours=1)
+
+        # 4. Собираем тело запроса для API
+        event = {
+            'summary': title,
+            'description': description,
+            'start': {
+                'dateTime': start_time.isoformat(),
+                'timeZone': 'Europe/Kyiv',
+            },
+            'end': {
+                'dateTime': end_time.isoformat(),
+                'timeZone': 'Europe/Kyiv',
+            },
+        }
+
+        # 5. Отправляем запрос в Google API с УКАЗАНИЕМ КОНКРЕТНОГО КАЛЕНДАРЯ
         service.events().insert(calendarId=calendar_id_to_use, body=event).execute()
+        
         print("Событие в Google Calendar успешно создано.")
+        return True
+        
+    except Exception as e:
+        print(f"Ошибка при создании события в Google Calendar: {e}")
+        return False
 
 # --- Основной обработчик с "Фейс-контролем" ---
 
