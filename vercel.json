@@ -1,7 +1,17 @@
 {
+  "builds": [
+    {
+      "src": "build.sh",
+      "use": "@vercel/static-build"
+    },
+    {
+      "src": "api/bot.py",
+      "use": "@vercel/python"
+    }
+  ],
   "rewrites": [
     {
-      "source": "/api/bot",
+      "source": "/(.*)",
       "destination": "/api/bot.py"
     }
   ]
