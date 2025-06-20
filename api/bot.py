@@ -10,6 +10,9 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from pydub import AudioSegment
 
+AudioSegment.converter = "/var/task/bin/ffmpeg"
+AudioSegment.ffprobe = "/var/task/bin/ffprobe"
+
 CATEGORY_EMOJI_MAP = {
     "Задача": "✅",
     "Встреча": "🤝",
