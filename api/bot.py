@@ -69,18 +69,9 @@ def create_google_calendar_event(title: str, description: str, start_time_iso: s
     end_time = start_time + timedelta(hours=1)
     event = {'summary': title, 'description': description, 'start': {'dateTime': start_time.isoformat(), 'timeZone': 'Europe/Kyiv'}, 'end': {'dateTime': end_time.isoformat(), 'timeZone': 'Europe/Kyiv'}}
     def create_google_calendar_event(title: str, description: str, start_time_iso: str):
-    # ... (код с creds и service не меняется) ...
-
-    # Получаем ID нужного календаря из переменных окружения
-    calendar_id_to_use = os.getenv('GOOGLE_CALENDAR_ID')
-
-    # ... (код с event не меняется) ...
-
-    # ВМЕСТО 'primary' ИСПОЛЬЗУЕМ ТОЧНЫЙ ID
-    service.events().insert(calendarId=calendar_id_to_use, body=event).execute()
-
-    print("Событие в Google Calendar успешно создано.")
-    print("Событие в Google Calendar успешно создано.")
+        calendar_id_to_use = os.getenv('GOOGLE_CALENDAR_ID')
+        service.events().insert(calendarId=calendar_id_to_use, body=event).execute()
+        print("Событие в Google Calendar успешно создано.")
 
 # --- Основной обработчик с "Фейс-контролем" ---
 
