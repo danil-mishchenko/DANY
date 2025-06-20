@@ -25,9 +25,36 @@ NOTION_DATABASE_ID = os.getenv('NOTION_DATABASE_ID')
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 GOOGLE_CREDENTIALS_JSON = os.getenv('GOOGLE_CREDENTIALS_JSON')
 ALLOWED_TELEGRAM_ID = os.getenv('ALLOWED_TELEGRAM_ID') # Твой личный ID
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+
+openai.api_key = OPENAI_API_KEY
 
 # --- Функции для работы с API (без Whisper) ---
+def download_telegram_file(file_id: str) -> io.BytesIO:
+    """Загружает файл (голосовое сообщение) с серверов Telegram."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}"
+    response = requests.get(url)
+    file_path = response.json()['result']['file_path']
+    file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+    file_response = requests.get(file_url)
+    return io.BytesIO(file_response.content)
 
+def transcribe_audio_with_whisper(audio_file: io.BytesIO) -> str:
+    """Отправляет аудиофайл в OpenAI Whisper для транскрибации."""
+    audio_file.name = "voice.oga"
+    transcription_prompt = "Это личная голосовая заметка. Важно сохранить знаки препинания и четкость формулировок."
+    try:
+        transcript = openai.audio.transcriptions.create(
+            model="gpt-4o-mini-transcribe",  # <--- ИСПОЛЬЗУЕМ ВЕРСИЮ 4o-mini
+            file=audio_file,
+            prompt=transcription_prompt
+        )
+        print("Аудио успешно транскрибировано с помощью gpt-4o-mini-transcribe.")
+        return transcript.text
+    except Exception as e:
+        print(f"Ошибка при транскрибации аудио: {e}")
+        return None
+        
 def send_telegram_message(chat_id: str, text: str):
     """Отправляет текстовое сообщение пользователю в Telegram."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -144,7 +171,6 @@ def create_google_calendar_event(title: str, description: str, start_time_iso: s
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
-        # Определяем chat_id в самом начале, чтобы можно было отправлять сообщения об ошибках
         chat_id = None
         try:
             content_length = int(self.headers['Content-Length'])
@@ -156,15 +182,28 @@ class handler(BaseHTTPRequestHandler):
 
             message = update['message']
             user_id = str(message['from']['id'])
-            chat_id = message['chat']['id']  # <--- Получаем ID чата для ответа
+            chat_id = message['chat']['id']
 
             if user_id != ALLOWED_TELEGRAM_ID:
-                print(f"ОТКАЗ В ДОСТУПЕ: Попытка использования от юзера {user_id}")
                 self.send_response(200); self.end_headers(); return
 
-            if 'text' in message:
+            text_to_process = None
+
+            # Шаг 1: Проверяем, есть ли голосовое сообщение
+            if 'voice' in message:
+                print("Получено голосовое сообщение. Начинаю транскрибацию...")
+                audio_file_io = download_telegram_file(message['voice']['file_id'])
+                text_to_process = transcribe_audio_with_whisper(audio_file_io)
+                if not text_to_process:
+                    send_telegram_message(chat_id, "❌ Не удалось распознать речь в голосовом сообщении.")
+            
+            # Шаг 2: Если голосового нет, проверяем, есть ли текст
+            elif 'text' in message:
+                print("Получено текстовое сообщение.")
                 text_to_process = message['text']
 
+            # Если после всех проверок у нас есть текст для обработки, запускаем магию
+            if text_to_process:
                 ai_result_str = process_with_deepseek(text_to_process)
                 ai_data = json.loads(ai_result_str)
                 
@@ -173,36 +212,24 @@ class handler(BaseHTTPRequestHandler):
                 category = ai_data.get('category', 'Мысль')
                 event_time_iso = ai_data.get('event_datetime_iso')
 
-                # --- ОТЧЕТ О СОЗДАНИИ ЗАМЕТКИ В NOTION ---
+                # ОТЧЕТ О СОЗДАНИИ ЗАМЕТКИ В NOTION
                 try:
                     create_notion_page(title, content, category)
-                    # Формируем красивый отчет и ОТПРАВЛЯЕМ ЕГО
-                    feedback_text = (
-                        f"✅ *Заметка в Notion создана!*\n\n"
-                        f"*Название:* {title}\n"
-                        f"*Категория:* {category}"
-                    )
+                    feedback_text = (f"✅ *Заметка в Notion создана!*\n\n*Название:* {title}\n*Категория:* {category}")
                     send_telegram_message(chat_id, feedback_text)
                 except Exception as e:
                     error_text = f"❌ *Ошибка при создании заметки в Notion:*\n`{e}`"
                     send_telegram_message(chat_id, error_text)
                     print(f"Ошибка при создании страницы в Notion: {e}")
 
-                # --- ОТЧЕТ О СОЗДАНИИ СОБЫТИЯ В КАЛЕНДАРЕ ---
+                # ОТЧЕТ О СОЗДАНИИ СОБЫТИЯ В КАЛЕНДАРЕ
                 if event_time_iso:
                     try:
                         create_google_calendar_event(title, content, event_time_iso)
-                        
-                        # Форматируем дату для красивого вывода
                         dt_object = datetime.fromisoformat(event_time_iso)
                         months_map = {1: 'января', 2: 'февраля', 3: 'марта', 4: 'апреля', 5: 'мая', 6: 'июня', 7: 'июля', 8: 'августа', 9: 'сентября', 10: 'октября', 11: 'ноября', 12: 'декабря'}
                         formatted_date = f"{dt_object.day} {months_map[dt_object.month]} {dt_object.year} в {dt_object.strftime('%H:%M')}"
-
-                        feedback_text = (
-                            f"📅 *Событие в Календарь добавлено!*\n\n"
-                            f"*Название:* {title}\n"
-                            f"*Когда:* {formatted_date}"
-                        )
+                        feedback_text = (f"📅 *Событие в Календарь добавлено!*\n\n*Название:* {title}\n*Когда:* {formatted_date}")
                         send_telegram_message(chat_id, feedback_text)
                     except Exception as e:
                         error_text = f"❌ *Ошибка при создании события в Календаре:*\n`{e}`"
@@ -210,7 +237,6 @@ class handler(BaseHTTPRequestHandler):
                         print(f"Ошибка при создании события в Google Calendar: {e}")
 
         except Exception as e:
-            # Отправляем сообщение об общей ошибке, если у нас есть chat_id
             if chat_id:
                 send_telegram_message(chat_id, f"🤯 *Произошла глобальная ошибка!*\nПожалуйста, проверьте логи Vercel.\n`{e}`")
             print(f"Произошла глобальная ошибка: {e}")
