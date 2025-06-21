@@ -77,153 +77,80 @@ def transcribe_with_assemblyai(audio_file_bytes) -> str:
             return None
         time.sleep(2) # Пауза перед следующей проверкой
         
-def send_telegram_message(chat_id: str, text: str, use_html: bool = False):
-    """Отправляет текстовое сообщение пользователю в Telegram."""
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-
-    # Определяем режим форматирования на основе нового параметра
-    parse_mode = 'HTML' if use_html else 'Markdown'
-
-    payload = {
-        'chat_id': chat_id,
-        'text': text,
-        'parse_mode': parse_mode
-    }
-    try:
-        response = requests.post(url, json=payload)
-        response.raise_for_status()
-        print(f"Сообщение успешно отправлено пользователю {chat_id}")
-    except Exception as e:
-        print(f"Ошибка при отправке сообщения в Telegram: {e}")
+def parse_to_notion_blocks(formatted_text: str) -> list:
+    """Превращает отформатированный текст в список блоков для API Notion."""
+    blocks = []
+    for line in formatted_text.split('\n'):
+        if line.strip().startswith('- '):
+            # Это элемент списка
+            blocks.append({
+                "object": "block",
+                "type": "bulleted_list_item",
+                "bulleted_list_item": {
+                    "rich_text": [{"type": "text", "text": {"content": line.strip().lstrip('- ')}}]
+                }
+            })
+        elif line.strip():
+            # Это обычный параграф
+            blocks.append({
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": line}}]
+                }
+            })
+    return blocks
 
 def process_with_deepseek(text: str) -> dict:
     """Отправляет текст в DeepSeek для умного форматирования и извлечения данных."""
     url = "https://api.deepseek.com/chat/completions"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
     
-    current_date_str = datetime.now().strftime('%Y-%m-%d')
-    # НОВЫЙ, УЛУЧШЕННЫЙ ПРОМПТ
+    # ИСПРАВЛЕНИЕ: Даем ИИ точное текущее время для расчета относительных дат
+    current_datetime_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
     prompt = f"""
-    Ты — умный редактор и ассистент по ведению заметок. Проанализируй заметку пользователя.
-
-    Твои задачи:
-    1.  **Язык:** ВАЖНО! Сохраняй язык оригинала. Если текст на английском, ответ тоже должен быть на английском. Не переводи.
-    2.  **Заголовок и Категория:** Создай один общий, емкий заголовок для заметки и определи ее категорию из списка: [Идея, Задача, Покупка, Встреча, Мысль, Ссылка, Цитата].
-    3.  **Форматирование текста:** Возьми исходный текст и красиво его отформатируй.
-        * **Заголовки/Подзаголовки:** Делай их **жирными**.
-        * **Списки (задачи, покупки):** Оформляй в виде буллет-поинтов (`-`). Если уместно, добавь в начало строки подходящий по смыслу эмодзи (в меру!).
-        * **Комментарии/Примечания:** Выделяй *курсивом*.
-        * **Структура:** Разделяй текст на логические абзацы для лучшей читаемости.
-    4.  **События:** Найди в тексте ВСЕ события с датой и временем и извлеки их в отдельный список `events`. Если событий нет, верни пустой список `[]`.
-    5.  **Результат:** Верни все в строго формате JSON.
-
-    Пример форматирования:
-    Входной текст: "купить молоко хлеб яйца. еще сыр и колбасу. коммент: молоко безлактозное"
-    Пример отформатированного тела заметки:
-    "**🛒 Список покупок:**
-    - 🥛 Молоко (*взять безлактозное*)
-    - 🍞 Хлеб
-    - 🥚 Яйца
-    - 🧀 Сыр
-    - 🍖 Колбаса"
-
-    Формат JSON:
-    {{
-      "main_title": "общий_заголовок",
-      "category": "одна_категория",
-      "formatted_body": "красиво_отформатированный_текст_заметки_со_всеми_правилами",
-      "events": [ {{ "title": "название_события", "datetime_iso": "YYYY-MM-DDTHH:MM:SS" }} ]
-    }}
-
-    Заметка для обработки:
-    ---
-    {text}
-    ---
+    Твоя роль: умный редактор заметок. Проанализируй заметку пользователя. Текущее время: {current_datetime_str}.
+    Задачи:
+    1. Язык: Сохраняй язык оригинала. Не переводи.
+    2. Заголовок и Категория: Создай емкий заголовок и определи категорию из списка: [Идея, Задача, Покупка, Встреча, Мысль, Ссылка, Цитата].
+    3. Форматирование: Красиво отформатируй текст. Заголовки - жирным. Списки - через дефис с эмодзи. Комментарии - курсивом.
+    4. События: Найди ВСЕ события с датой/временем. Учитывай относительные даты ("завтра", "через 30 минут"). Конвертируй их в абсолютный формат YYYY-MM-DDTHH:MM:SS. Если событий нет - верни пустой список "events": [].
+    5. Результат: Верни строго JSON.
+    Формат JSON: {{"main_title": "...", "category": "...", "formatted_body": "...", "events": [{{"title": "...", "datetime_iso": "..."}}]}}
+    Заметка: --- {text} ---
     """
-    data = {
-        "model": "deepseek-chat",
-        "messages": [{"role": "user", "content": prompt}],
-        "response_format": {"type": "json_object"}
-    }
+    data = {"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}}
     response = requests.post(url, headers=headers, json=data)
     response.raise_for_status()
-    
-    json_string_from_ai = response.json()['choices'][0]['message']['content']
-    return json.loads(json_string_from_ai)
+    return json.loads(response.json()['choices'][0]['message']['content'])
 
+# ИСПРАВЛЕННАЯ ФУНКЦИЯ для создания настоящих rich-text страниц
 def create_notion_page(title: str, formatted_content: str, category: str):
-    """Создает новую страницу в Notion, используя отформатированный контент в блоке кода."""
+    """Создает новую страницу в Notion с нативными блоками (списки, параграфы)."""
     url = 'https://api.notion.com/v1/pages'
-    headers = {
-        'Authorization': f'Bearer {NOTION_TOKEN}',
-        'Content-Type': 'application/json',
-        'Notion-Version': '2022-06-28'
-    }
-
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
     page_icon = CATEGORY_EMOJI_MAP.get(category, "📄")
-
-    properties = {
-        'Name': {'title': [{'type': 'text', 'text': {'content': title}}]},
-        'Категория': {'select': {'name': category}}
-    }
-
-    children = []
-    if formatted_content:
-        children.append({
-            "object": "block",
-            "type": "code",
-            "code": {
-                "rich_text": [{"type": "text", "text": {"content": formatted_content}}],
-                "language": "plain text" # <--- ВОТ ИСПРАВЛЕНИЕ! "plaintext" -> "plain text"
-            }
-        })
-
-    payload = {
-        'parent': {'database_id': NOTION_DATABASE_ID},
-        'icon': {'type': 'emoji', 'emoji': page_icon},
-        'properties': properties,
-        'children': children
-    }
-
+    properties = {'Name': {'title': [{'type': 'text', 'text': {'content': title}}]}, 'Категория': {'select': {'name': category}}}
+    
+    # Вызываем нашу новую функцию-парсер
+    children = parse_to_notion_blocks(formatted_content)
+    
+    payload = {'parent': {'database_id': NOTION_DATABASE_ID}, 'icon': {'type': 'emoji', 'emoji': page_icon}, 'properties': properties, 'children': children}
     response = requests.post(url, headers=headers, json=payload)
     response.raise_for_status()
-    print("Отформатированная страница в Notion успешно создана.")
     return response.json()['id']
-    
+
 def create_google_calendar_event(title: str, description: str, start_time_iso: str):
-    """Создает новое событие в Google Календаре с уведомлением."""
-    try:
-        # ... (код для creds и service не меняется)
-        creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
-        creds = service_account.Credentials.from_service_account_info(creds_info)
-        service = build('calendar', 'v3', credentials=creds)
-        
-        calendar_id_to_use = os.getenv('GOOGLE_CALENDAR_ID')
-        start_time = datetime.fromisoformat(start_time_iso)
-        end_time = start_time + timedelta(hours=1)
-
-        event = {
-            'summary': title,
-            'description': description,
-            'start': {'dateTime': start_time.isoformat(), 'timeZone': 'Europe/Kyiv'},
-            'end': {'dateTime': end_time.isoformat(), 'timeZone': 'Europe/Kyiv'},
-            # --- ДОБАВЛЯЕМ БЛОК С УВЕДОМЛЕНИЕМ ---
-            'reminders': {
-                'useDefault': False, # Не использовать стандартные настройки календаря
-                'overrides': [
-                    # Добавляем всплывающее уведомление за 15 минут
-                    {'method': 'popup', 'minutes': 15},
-                ],
-            },
-            # -----------------------------------------
-        }
-
-        created_event = service.events().insert(calendarId=calendar_id_to_use, body=event).execute()
-        print("Событие в Google Calendar успешно создано с уведомлением.")
-        return created_event.get('id') # <--- ВОЗВРАЩАЕМ ID СОБЫТИЯ
-    except Exception as e:
-        print(f"Ошибка при создании события в Google Calendar: {e}")
-        return False
+    """Создает событие в Google Календаре."""
+    creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
+    creds = service_account.Credentials.from_service_account_info(creds_info)
+    service = build('calendar', 'v3', credentials=creds)
+    start_time = datetime.fromisoformat(start_time_iso)
+    end_time = start_time + timedelta(hours=1)
+    event = {'summary': title, 'description': description, 'start': {'dateTime': start_time.isoformat(), 'timeZone': 'Europe/Kyiv'}, 'end': {'dateTime': end_time.isoformat(), 'timeZone': 'Europe/Kyiv'}, 'reminders': {'useDefault': False, 'overrides': [{'method': 'popup', 'minutes': 15}]}}
+    created_event = service.events().insert(calendarId=GOOGLE_CALENDAR_ID, body=event).execute()
+    return created_event.get('id')
 
 def delete_gcal_event(calendar_id: str, event_id: str):
     """Удаляет событие из Google Календаря."""
