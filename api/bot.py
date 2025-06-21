@@ -88,22 +88,30 @@ def transcribe_with_assemblyai(audio_file_bytes) -> str:
             return None
         time.sleep(2) # Пауза перед следующей проверкой
 
-def send_telegram_message(chat_id: str, text: str, use_html: bool = False):
-    """Отправляет текстовое сообщение пользователю в Telegram."""
+def send_telegram_message(chat_id: str, text: str, use_html: bool = False, add_undo_button: bool = False):
+    """Отправляет текстовое сообщение пользователю, опционально с кнопкой "Отменить"."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    
-    # Определяем режим форматирования на основе нового параметра
-    parse_mode = 'HTML' if use_html else 'Markdown'
     
     payload = {
         'chat_id': chat_id,
         'text': text,
-        'parse_mode': parse_mode
+        'parse_mode': 'HTML' if use_html else 'Markdown'
     }
+
+    # Если нужно, добавляем кнопку "Отменить"
+    if add_undo_button:
+        keyboard = {
+            "inline_keyboard": [[
+                {
+                    "text": "↩️ Отменить",
+                    "callback_data": "undo_last_action" # Метка, которую мы будем ловить
+                }
+            ]]
+        }
+        payload['reply_markup'] = json.dumps(keyboard)
+
     try:
-        response = requests.post(url, json=payload)
-        response.raise_for_status()
-        print(f"Сообщение успешно отправлено пользователю {chat_id}")
+        requests.post(url, json=payload).raise_for_status()
     except Exception as e:
         print(f"Ошибка при отправке сообщения в Telegram: {e}")
 
@@ -303,21 +311,41 @@ class handler(BaseHTTPRequestHandler):
             body = self.rfile.read(content_length)
             update = json.loads(body.decode('utf-8'))
 
+            # --- НОВАЯ ЛОГИКА: ОБРАБОТКА НАЖАТИЯ КНОПОК ---
+            if 'callback_query' in update:
+                callback_data = update['callback_query']['data']
+                chat_id = update['callback_query']['message']['chat']['id']
+                callback_query_id = update['callback_query']['id']
+
+                # Отвечаем Telegram, что мы получили нажатие, чтобы пропал значок "загрузки" на кнопке
+                requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery?callback_query_id={callback_query_id}")
+
+                if callback_data == 'undo_last_action':
+                    print("Получено нажатие кнопки 'Отменить'")
+                    last_action = get_and_delete_last_log()
+                    if last_action:
+                        if last_action.get('notion_page_id'): delete_notion_page(last_action['notion_page_id'])
+                        if last_action.get('gcal_event_id') and last_action.get('gcal_calendar_id'): delete_gcal_event(last_action['gcal_calendar_id'], last_action['gcal_event_id'])
+                        send_telegram_message(chat_id, "✅ Последнее действие отменено.")
+                    else:
+                        send_telegram_message(chat_id, "🤔 Не найдено действий для отмены.")
+                
+                self.send_response(200); self.end_headers(); return
+            # --- КОНЕЦ ЛОГИКИ ОБРАБОТКИ КНОПОК ---
+
+
+            # --- СТАРАЯ ЛОГИКА: ОБРАБОТКА СООБЩЕНИЙ ---
             if 'message' not in update: self.send_response(200); self.end_headers(); return
+            
             message = update['message']
             user_id = str(message['from']['id'])
             chat_id = message['chat']['id']
 
             if user_id != ALLOWED_TELEGRAM_ID: self.send_response(200); self.end_headers(); return
             
+            # Мы удалили команду /undo, так как теперь есть кнопка
             if message.get('text') == '/undo':
-                last_action = get_and_delete_last_log()
-                if last_action:
-                    if last_action.get('notion_page_id'): delete_notion_page(last_action['notion_page_id'])
-                    if last_action.get('gcal_event_id') and last_action.get('gcal_calendar_id'): delete_gcal_event(last_action['gcal_calendar_id'], last_action['gcal_event_id'])
-                    send_telegram_message(chat_id, "✅ Последнее действие отменено.")
-                else:
-                    send_telegram_message(chat_id, "🤔 Не найдено действий для отмены.")
+                send_telegram_message(chat_id, "Пожалуйста, используйте кнопку 'Отменить' под сообщением.")
                 self.send_response(200); self.end_headers(); return
 
             text_to_process = None
@@ -330,42 +358,35 @@ class handler(BaseHTTPRequestHandler):
 
             if text_to_process:
                 ai_data = process_with_deepseek(text_to_process)
-                
                 notion_title = ai_data.get('main_title', 'Новая заметка')
                 notion_category = ai_data.get('category', 'Мысль')
                 formatted_body = ai_data.get('formatted_body', text_to_process)
                 
-                # Создание заметки в Notion
                 try:
                     notion_page_id = create_notion_page(notion_title, formatted_body, notion_category)
-                    if notion_page_id:
-                        log_last_action(notion_page_id=notion_page_id)
-                    send_telegram_message(chat_id, f"✅ *Заметка в Notion создана!*\n\n*Название:* {notion_title}\n*Категория:* {notion_category}")
+                    if notion_page_id: log_last_action(notion_page_id=notion_page_id)
+                    feedback_text = (f"✅ *Заметка в Notion создана!*\n\n*Название:* {notion_title}\n*Категория:* {notion_category}")
+                    # Отправляем сообщение С КНОПКОЙ
+                    send_telegram_message(chat_id, feedback_text, add_undo_button=True)
                 except Exception as e:
                     detailed_error = e.response.text if hasattr(e, 'response') else str(e)
                     send_telegram_message(chat_id, f"❌ *Ошибка при создании заметки в Notion:*\n<pre>{detailed_error}</pre>", use_html=True)
 
-                # Обработка событий для Календаря
-                calendar_events = ai_data.get('events', [])
-                valid_events = [
-                    event for event in calendar_events 
-                    if event and event.get('title') and event.get('datetime_iso')
-                ]
-
+                valid_events = [event for event in ai_data.get('events', []) if event and event.get('title') and event.get('datetime_iso')]
                 if valid_events:
                     created_events_titles = []
                     for event in valid_events:
                         try:
-                            # Передаем отформатированное тело как описание
                             gcal_event_id = create_google_calendar_event(event['title'], formatted_body, event['datetime_iso'])
-                            if gcal_event_id:
-                                log_last_action(gcal_event_id=gcal_event_id)
+                            if gcal_event_id: log_last_action(gcal_event_id=gcal_event_id)
                             created_events_titles.append(event['title'])
                         except Exception as e:
                             send_telegram_message(chat_id, f"❌ *Ошибка при создании события '{event['title']}':*\n`{e}`")
                     
                     if created_events_titles:
-                        send_telegram_message(chat_id, f"📅 *Добавлено {len(created_events_titles)} события в Календарь:*\n- " + "\n- ".join(created_events_titles))
+                        feedback_text = (f"📅 *Добавлено {len(created_events_titles)} события в Календарь:*\n- " + "\n- ".join(created_events_titles))
+                        # Отправляем сообщение С КНОПКОЙ
+                        send_telegram_message(chat_id, feedback_text, add_undo_button=True)
 
         except Exception as e:
             if chat_id:
