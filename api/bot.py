@@ -8,7 +8,16 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+import re
 
+def markdown_to_gcal_html(md_text: str) -> str:
+    """Конвертирует простой Markdown в HTML для Google Календаря."""
+    # Заменяем **жирный** на <b>жирный</b>
+    text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', md_text)
+    # Заменяем *курсив* на <i>курсив</i>
+    text = re.sub(r'\*(.*?)\*', r'<i>\1</i>', text)
+    return text
+    
 CATEGORY_EMOJI_MAP = {
     "Задача": "✅",
     "Встреча": "🤝",
@@ -99,29 +108,51 @@ def send_telegram_message(chat_id: str, text: str, use_html: bool = False):
         print(f"Ошибка при отправке сообщения в Telegram: {e}")
 
 def parse_to_notion_blocks(formatted_text: str) -> list:
-    """Превращает отформатированный текст в список блоков для API Notion."""
+    """Превращает текст с Markdown-разметкой в нативные блоки Notion (параграфы, списки, жирный/курсив)."""
     blocks = []
     for line in formatted_text.split('\n'):
-        if line.strip().startswith('- '):
-            # Это элемент списка
-            blocks.append({
-                "object": "block",
-                "type": "bulleted_list_item",
-                "bulleted_list_item": {
-                    "rich_text": [{"type": "text", "text": {"content": line.strip().lstrip('- ')}}]
-                }
-            })
-        elif line.strip():
-            # Это обычный параграф
-            blocks.append({
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {
-                    "rich_text": [{"type": "text", "text": {"content": line}}]
-                }
-            })
-    return blocks
+        if not line.strip(): continue # Пропускаем пустые строки
 
+        # Определяем тип блока (список или параграф)
+        block_type = "bulleted_list_item" if line.strip().startswith('- ') else "paragraph"
+        # Убираем маркер списка для дальнейшей обработки
+        clean_line = line.strip().lstrip('- ')
+        
+        # Создаем rich_text объекты с аннотациями для жирного и курсива
+        rich_text_objects = []
+        # Используем re.split, чтобы разбить строку по ** или *
+        parts = re.split(r'(\*\*.*?\*\*|\*.*?\*)', clean_line)
+        
+        for part in parts:
+            if not part: continue
+            
+            is_bold = part.startswith('**') and part.endswith('**')
+            is_italic = part.startswith('*') and part.endswith('*')
+            
+            content = part
+            annotations = {"bold": False, "italic": False}
+
+            if is_bold:
+                content = part.strip('**')
+                annotations["bold"] = True
+            elif is_italic:
+                content = part.strip('*')
+                annotations["italic"] = True
+
+            rich_text_objects.append({
+                "type": "text",
+                "text": {"content": content},
+                "annotations": annotations
+            })
+
+        # Собираем финальный блок
+        if block_type == "bulleted_list_item":
+            blocks.append({"object": "block", "type": block_type, "bulleted_list_item": {"rich_text": rich_text_objects}})
+        else:
+            blocks.append({"object": "block", "type": block_type, "paragraph": {"rich_text": rich_text_objects}})
+            
+    return blocks
+    
 def process_with_deepseek(text: str) -> dict:
     """Отправляет текст в DeepSeek для умного форматирования и извлечения данных."""
     url = "https://api.deepseek.com/chat/completions"
@@ -163,13 +194,23 @@ def create_notion_page(title: str, formatted_content: str, category: str):
     return response.json()['id']
 
 def create_google_calendar_event(title: str, description: str, start_time_iso: str):
-    """Создает событие в Google Календаре."""
+    """Создает событие в Google Календаре, конвертируя описание в HTML."""
     creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
     creds = service_account.Credentials.from_service_account_info(creds_info)
     service = build('calendar', 'v3', credentials=creds)
     start_time = datetime.fromisoformat(start_time_iso)
     end_time = start_time + timedelta(hours=1)
-    event = {'summary': title, 'description': description, 'start': {'dateTime': start_time.isoformat(), 'timeZone': 'Europe/Kyiv'}, 'end': {'dateTime': end_time.isoformat(), 'timeZone': 'Europe/Kyiv'}, 'reminders': {'useDefault': False, 'overrides': [{'method': 'popup', 'minutes': 15}]}}
+    
+    # Конвертируем описание в HTML перед отправкой
+    html_description = markdown_to_gcal_html(description)
+
+    event = {
+        'summary': title,
+        'description': html_description, # <--- ИСПОЛЬЗУЕМ HTML
+        'start': {'dateTime': start_time.isoformat(), 'timeZone': 'Europe/Kyiv'},
+        'end': {'dateTime': end_time.isoformat(), 'timeZone': 'Europe/Kyiv'},
+        'reminders': {'useDefault': False, 'overrides': [{'method': 'popup', 'minutes': 15}]}
+    }
     created_event = service.events().insert(calendarId=GOOGLE_CALENDAR_ID, body=event).execute()
     return created_event.get('id')
 
@@ -305,10 +346,9 @@ class handler(BaseHTTPRequestHandler):
                 if valid_events:
                     created_events_titles = []
                     for event in valid_events:
-                        try:
+                       try:
+                            # Передаем Formatted_body в качестве описания для события
                             gcal_event_id = create_google_calendar_event(event['title'], formatted_body, event['datetime_iso'])
-                            if gcal_event_id: log_last_action(gcal_event_id=gcal_event_id)
-                            created_events_titles.append(event['title'])
                         except Exception as e:
                             send_telegram_message(chat_id, f"❌ *Ошибка при создании события '{event['title']}':*\n`{e}`")
                     
