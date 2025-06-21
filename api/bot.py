@@ -159,15 +159,14 @@ def create_notion_page(title: str, formatted_content: str, category: str):
         'Content-Type': 'application/json',
         'Notion-Version': '2022-06-28'
     }
-    
+
     page_icon = CATEGORY_EMOJI_MAP.get(category, "📄")
 
     properties = {
         'Name': {'title': [{'type': 'text', 'text': {'content': title}}]},
         'Категория': {'select': {'name': category}}
     }
-    
-    # Создаем ОДИН блок типа "code" с отформатированным текстом внутри
+
     children = []
     if formatted_content:
         children.append({
@@ -175,10 +174,10 @@ def create_notion_page(title: str, formatted_content: str, category: str):
             "type": "code",
             "code": {
                 "rich_text": [{"type": "text", "text": {"content": formatted_content}}],
-                "language": "plaintext" # Указываем язык как простой текст
+                "language": "plain text" # <--- ВОТ ИСПРАВЛЕНИЕ! "plaintext" -> "plain text"
             }
         })
-    
+
     payload = {
         'parent': {'database_id': NOTION_DATABASE_ID},
         'icon': {'type': 'emoji', 'emoji': page_icon},
@@ -186,7 +185,6 @@ def create_notion_page(title: str, formatted_content: str, category: str):
         'children': children
     }
 
-    print("ОТПРАВЛЯЕМЫЙ PAYLOAD В NOTION:", json.dumps(payload, indent=2, ensure_ascii=False))
     response = requests.post(url, headers=headers, json=payload)
     response.raise_for_status()
     print("Отформатированная страница в Notion успешно создана.")
