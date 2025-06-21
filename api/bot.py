@@ -4,7 +4,7 @@ import json
 import requests
 import time # Импортируем для создания паузы
 import io
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -228,19 +228,22 @@ def parse_to_notion_blocks(formatted_text: str) -> list:
     return blocks
     
 def process_with_deepseek(text: str) -> dict:
-    """Отправляет текст в DeepSeek для умного форматирования и извлечения данных."""
+    """Отправляет текст в DeepSeek, передавая корректное киевское время."""
     url = "https://api.deepseek.com/chat/completions"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
     
-    # ИСПРАВЛЕНИЕ: Даем ИИ точное текущее время для расчета относительных дат
-    current_datetime_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
+    # --- ИСПРАВЛЕНИЕ: Получаем время с учетом часового пояса Киева (UTC+3) ---
+    kyiv_tz = timezone(timedelta(hours=3))
+    current_datetime_in_kyiv = datetime.now(kyiv_tz)
+    current_datetime_str = current_datetime_in_kyiv.strftime('%Y-%m-%d %H:%M:%S')
+    # --------------------------------------------------------------------
+
     prompt = f"""
-    Твоя роль: умный редактор заметок. Проанализируй заметку пользователя. Текущее время: {current_datetime_str}.
+    Твоя роль: умный редактор заметок. Проанализируй заметку пользователя. Текущее время для расчетов: {current_datetime_str} (Часовой пояс Киев, EEST).
     Задачи:
     1. Язык: Сохраняй язык оригинала. Не переводи.
     2. Заголовок и Категория: Создай емкий заголовок и определи категорию из списка: [Идея, Задача, Покупка, Встреча, Мысль, Ссылка, Цитата].
-    3. Форматирование: Красиво отформатируй текст. Заголовки - жирным. Списки - через дефис с эмодзи. Комментарии - курсивом.
+    3. Форматирование: Очень Красиво отформатируй текст, можешь оптимизировать если где-то явное пустословие. Заголовки - жирным, можно с эмодзи. Списки - через дефис с эмодзи. Комментарии, мысли - курсивом. Они должны быть прекрасными и эстетичными.
     4. События: Найди ВСЕ события с датой/временем. Учитывай относительные даты ("завтра", "через 30 минут"). Конвертируй их в абсолютный формат YYYY-MM-DDTHH:MM:SS. Если событий нет - верни пустой список "events": [].
     5. Результат: Верни строго JSON.
     Формат JSON: {{"main_title": "...", "category": "...", "formatted_body": "...", "events": [{{"title": "...", "datetime_iso": "..."}}]}}
