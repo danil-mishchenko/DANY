@@ -330,25 +330,37 @@ class handler(BaseHTTPRequestHandler):
 
             if text_to_process:
                 ai_data = process_with_deepseek(text_to_process)
+                
                 notion_title = ai_data.get('main_title', 'Новая заметка')
                 notion_category = ai_data.get('category', 'Мысль')
                 formatted_body = ai_data.get('formatted_body', text_to_process)
                 
+                # Создание заметки в Notion
                 try:
                     notion_page_id = create_notion_page(notion_title, formatted_body, notion_category)
-                    if notion_page_id: log_last_action(notion_page_id=notion_page_id)
+                    if notion_page_id:
+                        log_last_action(notion_page_id=notion_page_id)
                     send_telegram_message(chat_id, f"✅ *Заметка в Notion создана!*\n\n*Название:* {notion_title}\n*Категория:* {notion_category}")
                 except Exception as e:
                     detailed_error = e.response.text if hasattr(e, 'response') else str(e)
                     send_telegram_message(chat_id, f"❌ *Ошибка при создании заметки в Notion:*\n<pre>{detailed_error}</pre>", use_html=True)
 
-                valid_events = [event for event in ai_data.get('events', []) if event and event.get('title') and event.get('datetime_iso')]
+                # Обработка событий для Календаря
+                calendar_events = ai_data.get('events', [])
+                valid_events = [
+                    event for event in calendar_events 
+                    if event and event.get('title') and event.get('datetime_iso')
+                ]
+
                 if valid_events:
                     created_events_titles = []
                     for event in valid_events:
-                       try:
-                            # Передаем Formatted_body в качестве описания для события
+                        try:
+                            # Передаем отформатированное тело как описание
                             gcal_event_id = create_google_calendar_event(event['title'], formatted_body, event['datetime_iso'])
+                            if gcal_event_id:
+                                log_last_action(gcal_event_id=gcal_event_id)
+                            created_events_titles.append(event['title'])
                         except Exception as e:
                             send_telegram_message(chat_id, f"❌ *Ошибка при создании события '{event['title']}':*\n`{e}`")
                     
