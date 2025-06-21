@@ -118,29 +118,26 @@ def send_telegram_message(chat_id: str, text: str, use_html: bool = False, add_u
 # --- НОВЫЕ ФУНКЦИИ ДЛЯ ПОИСКА ---
 
 def search_notion_pages(query: str):
-    """Ищет страницы в Notion и фильтрует их по ID нашей основной базы данных."""
-    url = "https://api.notion.com/v1/search"
+    """Ищет страницы по содержимому в нашей базе данных с помощью фильтра."""
+    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
+    
+    # Создаем фильтр, который ищет текст в свойстве "Содержание"
     payload = {
-        "query": query, 
-        "page_size": 5, # Ищем до 5 страниц для релевантности
         "filter": {
-            "value": "page",
-            "property": "object"
-        }
+            "property": "Содержание",
+            "rich_text": {
+                "contains": query
+            }
+        },
+        "page_size": 5 # Возвращаем до 5 самых релевантных страниц
     }
+    
     headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
     response = requests.post(url, headers=headers, json=payload)
     response.raise_for_status()
-    all_results = response.json().get('results', [])
     
-    # Фильтруем результаты, оставляя только страницы из нашей основной базы данных
-    # Это важно, чтобы не искать в логах или других базах
-    correct_db_pages = [
-        page for page in all_results 
-        if page.get('parent', {}).get('database_id', '').replace('-', '') == NOTION_DATABASE_ID.replace('-', '')
-    ]
-    return correct_db_pages
-
+    return response.json().get('results', [])
+    
 def get_notion_page_content(page_id: str) -> str:
     """Получает все текстовое содержимое со страницы Notion."""
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
@@ -256,13 +253,21 @@ def process_with_deepseek(text: str) -> dict:
 
 # ИСПРАВЛЕННАЯ ФУНКЦИЯ для создания настоящих rich-text страниц
 def create_notion_page(title: str, formatted_content: str, category: str):
-    """Создает новую страницу в Notion с нативными блоками (списки, параграфы)."""
+    """Создает новую страницу в Notion, дублируя контент в свойство 'Содержание' для поиска."""
     url = 'https://api.notion.com/v1/pages'
     headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
     page_icon = CATEGORY_EMOJI_MAP.get(category, "📄")
-    properties = {'Name': {'title': [{'type': 'text', 'text': {'content': title}}]}, 'Категория': {'select': {'name': category}}}
     
-    # Вызываем нашу новую функцию-парсер
+    # Обрезаем контент до 2000 символов, т.к. это лимит для одного rich_text поля в Notion
+    searchable_content = formatted_content[:2000]
+
+    properties = {
+        'Name': {'title': [{'type': 'text', 'text': {'content': title}}]},
+        'Категория': {'select': {'name': category}},
+        # ДОБАВЛЯЕМ НОВОЕ ПОЛЕ: копируем сюда текст заметки для поиска
+        'Содержание': {'rich_text': [{'type': 'text', 'text': {'content': searchable_content}}]}
+    }
+    
     children = parse_to_notion_blocks(formatted_content)
     
     payload = {'parent': {'database_id': NOTION_DATABASE_ID}, 'icon': {'type': 'emoji', 'emoji': page_icon}, 'properties': properties, 'children': children}
