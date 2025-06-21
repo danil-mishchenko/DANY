@@ -76,7 +76,26 @@ def transcribe_with_assemblyai(audio_file_bytes) -> str:
             print("Ошибка транскрибации в AssemblyAI.")
             return None
         time.sleep(2) # Пауза перед следующей проверкой
-        
+
+def send_telegram_message(chat_id: str, text: str, use_html: bool = False):
+    """Отправляет текстовое сообщение пользователю в Telegram."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    
+    # Определяем режим форматирования на основе нового параметра
+    parse_mode = 'HTML' if use_html else 'Markdown'
+    
+    payload = {
+        'chat_id': chat_id,
+        'text': text,
+        'parse_mode': parse_mode
+    }
+    try:
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        print(f"Сообщение успешно отправлено пользователю {chat_id}")
+    except Exception as e:
+        print(f"Ошибка при отправке сообщения в Telegram: {e}")
+
 def parse_to_notion_blocks(formatted_text: str) -> list:
     """Превращает отформатированный текст в список блоков для API Notion."""
     blocks = []
