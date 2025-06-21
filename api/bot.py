@@ -3,13 +3,11 @@ import os
 import json
 import requests
 import time # Импортируем для создания паузы
+import io
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-
-AudioSegment.converter = "/var/task/bin/ffmpeg"
-AudioSegment.ffprobe = "/var/task/bin/ffprobe"
 
 CATEGORY_EMOJI_MAP = {
     "Задача": "✅",
@@ -29,10 +27,7 @@ NOTION_DATABASE_ID = os.getenv('NOTION_DATABASE_ID')
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 GOOGLE_CREDENTIALS_JSON = os.getenv('GOOGLE_CREDENTIALS_JSON')
 ALLOWED_TELEGRAM_ID = os.getenv('ALLOWED_TELEGRAM_ID') # Твой личный ID
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 ASSEMBLYAI_API_KEY = os.getenv('ASSEMBLYAI_API_KEY') # Новый ключ
-
-openai.api_key = OPENAI_API_KEY
 
 # --- Функции для работы с API (без Whisper) ---
 def download_telegram_file(file_id: str) -> io.BytesIO:
