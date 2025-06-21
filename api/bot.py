@@ -24,10 +24,12 @@ CATEGORY_EMOJI_MAP = {
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 NOTION_TOKEN = os.getenv('NOTION_TOKEN')
 NOTION_DATABASE_ID = os.getenv('NOTION_DATABASE_ID')
+NOTION_LOG_DB_ID = os.getenv('NOTION_LOG_DB_ID')
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 GOOGLE_CREDENTIALS_JSON = os.getenv('GOOGLE_CREDENTIALS_JSON')
-ALLOWED_TELEGRAM_ID = os.getenv('ALLOWED_TELEGRAM_ID') # Твой личный ID
-ASSEMBLYAI_API_KEY = os.getenv('ASSEMBLYAI_API_KEY') # Новый ключ
+GOOGLE_CALENDAR_ID = os.getenv('GOOGLE_CALENDAR_ID') # <--- ВОТ ЭТА СТРОКА ПРОПАЛА
+ALLOWED_TELEGRAM_ID = os.getenv('ALLOWED_TELEGRAM_ID')
+ASSEMBLYAI_API_KEY = os.getenv('ASSEMBLYAI_API_KEY')
 
 # --- Функции для работы с API (без Whisper) ---
 def download_telegram_file(file_id: str) -> io.BytesIO:
