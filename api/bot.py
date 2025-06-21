@@ -77,13 +77,17 @@ def transcribe_with_assemblyai(audio_file_bytes) -> str:
             return None
         time.sleep(2) # Пауза перед следующей проверкой
         
-def send_telegram_message(chat_id: str, text: str):
+def send_telegram_message(chat_id: str, text: str, use_html: bool = False):
     """Отправляет текстовое сообщение пользователю в Telegram."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+
+    # Определяем режим форматирования на основе нового параметра
+    parse_mode = 'HTML' if use_html else 'Markdown'
+
     payload = {
         'chat_id': chat_id,
         'text': text,
-        'parse_mode': 'Markdown'  # Включаем форматирование (жирный, курсив)
+        'parse_mode': parse_mode
     }
     try:
         response = requests.post(url, json=payload)
@@ -91,7 +95,6 @@ def send_telegram_message(chat_id: str, text: str):
         print(f"Сообщение успешно отправлено пользователю {chat_id}")
     except Exception as e:
         print(f"Ошибка при отправке сообщения в Telegram: {e}")
-
 
 def process_with_deepseek(text: str) -> dict:
     """Отправляет текст в DeepSeek для умного форматирования и извлечения данных."""
