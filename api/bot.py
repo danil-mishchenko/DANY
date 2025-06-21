@@ -182,7 +182,8 @@ def create_notion_page(title: str, formatted_content: str, category: str):
         'properties': properties,
         'children': children
     }
-    
+
+    print("ОТПРАВЛЯЕМЫЙ PAYLOAD В NOTION:", json.dumps(payload, indent=2, ensure_ascii=False))
     response = requests.post(url, headers=headers, json=payload)
     response.raise_for_status()
     print("Отформатированная страница в Notion успешно создана.")
