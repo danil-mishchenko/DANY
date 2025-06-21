@@ -167,6 +167,8 @@ def create_notion_page(title: str, content: str, category: str):
     response = requests.post(url, headers=headers, json=payload)
     response.raise_for_status()
     print("Страница в Notion успешно создана с иконкой.")
+    return response.json()['id'] # <--- ВОЗВРАЩАЕМ ID СТРАНИЦЫ
+
     
 def create_google_calendar_event(title: str, description: str, start_time_iso: str):
     """Создает новое событие в Google Календаре с уведомлением."""
@@ -196,13 +198,91 @@ def create_google_calendar_event(title: str, description: str, start_time_iso: s
             # -----------------------------------------
         }
 
-        service.events().insert(calendarId=calendar_id_to_use, body=event).execute()
-        
+        created_event = service.events().insert(calendarId=calendar_id_to_use, body=event).execute()
         print("Событие в Google Calendar успешно создано с уведомлением.")
-        return True
+        return created_event.get('id') # <--- ВОЗВРАЩАЕМ ID СОБЫТИЯ
     except Exception as e:
         print(f"Ошибка при создании события в Google Calendar: {e}")
         return False
+
+def delete_gcal_event(calendar_id: str, event_id: str):
+    """Удаляет событие из Google Календаря."""
+    try:
+        creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
+        creds = service_account.Credentials.from_service_account_info(creds_info)
+        service = build('calendar', 'v3', credentials=creds)
+        
+        service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+        print(f"Событие GCal {event_id} удалено.")
+        return True
+    except Exception as e:
+        print(f"Ошибка при удалении события GCal: {e}")
+        return False
+
+def get_and_delete_last_log():
+    """Получает последнюю запись из лога, извлекает данные и удаляет запись."""
+    log_db_id = os.getenv('NOTION_LOG_DB_ID')
+    if not log_db_id:
+        return None
+
+    # 1. Получаем последнюю запись из базы
+    query_url = f"https://api.notion.com/v1/databases/{log_db_id}/query"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    payload = {
+        "sorts": [{"timestamp": "created_time", "direction": "descending"}],
+        "page_size": 1
+    }
+    response = requests.post(query_url, headers=headers, json=payload)
+    results = response.json().get('results', [])
+
+    if not results:
+        print("Лог действий пуст.")
+        return None
+
+    # 2. Извлекаем данные из записи
+    last_log_page = results[0]
+    log_page_id = last_log_page['id']
+    properties = last_log_page['properties']
+
+    def get_text(prop):
+        return prop['rich_text'][0]['text']['content'] if prop['rich_text'] else None
+
+    action_details = {
+        'notion_page_id': get_text(properties.get('NotionPageID')),
+        'gcal_event_id': get_text(properties.get('GCalEventID')),
+        'gcal_calendar_id': get_text(properties.get('GCalCalendarID'))
+    }
+    
+    # 3. Удаляем саму запись из лога, чтобы не отменить ее еще раз
+    delete_notion_page(log_page_id)
+    
+    print(f"Получены и удалены детали последнего действия: {action_details}")
+    return action_details
+
+def log_last_action(notion_page_id, gcal_event_id):
+    """Записывает ID последних созданных объектов в лог-базу Notion."""
+    log_db_id = os.getenv('NOTION_LOG_DB_ID')
+    url = 'https://api.notion.com/v1/pages'
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+
+    properties = {
+        'Name': {'title': [{'type': 'text', 'text': {'content': f"Action at {datetime.now()}"}}]}, # Главная колонка
+        'NotionPageID': {'rich_text': [{'type': 'text', 'text': {'content': notion_page_id or ""}}]},
+        'GCalEventID': {'rich_text': [{'type': 'text', 'text': {'content': gcal_event_id or ""}}]},
+        'GCalCalendarID': {'rich_text': [{'type': 'text', 'text': {'content': os.getenv('GOOGLE_CALENDAR_ID') or ""}}]}
+    }
+    payload = {'parent': {'database_id': log_db_id}, 'properties': properties}
+    requests.post(url, headers=headers, json=payload)
+    print("Действие успешно залогировано.")
+
+def delete_notion_page(page_id):
+    """Архивирует (удаляет) страницу в Notion."""
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Notion-Version': '2022-06-28'}
+    payload = {'archived': True}
+    requests.patch(url, headers=headers, json=payload)
+    print(f"Страница Notion {page_id} удалена.")
+
         
 # --- Основной обработчик с "Фейс-контролем" ---
 
@@ -224,56 +304,71 @@ class handler(BaseHTTPRequestHandler):
             if user_id != ALLOWED_TELEGRAM_ID:
                 self.send_response(200); self.end_headers(); return
 
+            # --- НОВАЯ ЛОГИКА ДЛЯ КОМАНДЫ /undo ---
+            if message.get('text') == '/undo':
+                print("Получена команда /undo")
+                last_action = get_and_delete_last_log()
+                if last_action:
+                    notion_id = last_action.get('notion_page_id')
+                    gcal_id = last_action.get('gcal_event_id')
+                    gcal_calendar = last_action.get('gcal_calendar_id')
+
+                    # Удаляем страницу Notion, если она была в логе
+                    if notion_id:
+                        delete_notion_page(notion_id)
+                    # Удаляем событие GCal, если оно было в логе
+                    if gcal_id and gcal_calendar:
+                        delete_gcal_event(gcal_calendar, gcal_id)
+                    
+                    send_telegram_message(chat_id, "✅ Последнее действие отменено.")
+                else:
+                    send_telegram_message(chat_id, "🤔 Не найдено действий для отмены.")
+                
+                self.send_response(200); self.end_headers(); return
+            # --- КОНЕЦ ЛОГИКИ /undo ---
+
             text_to_process = None
 
-            # Шаг 1: Проверяем, есть ли голосовое сообщение
             if 'voice' in message:
                 print("Получено голосовое сообщение. Начинаю транскрибацию...")
                 audio_bytes = download_telegram_file(message['voice']['file_id']).read()
                 text_to_process = transcribe_with_assemblyai(audio_bytes)
                 if not text_to_process:
-                    send_telegram_message(chat_id, "❌ Не удалось распознать речь в голосовом сообщении.")
+                    send_telegram_message(chat_id, "❌ Не удалось распознать речь.")
             
-            # Шаг 2: Если голосового нет, проверяем, есть ли текст
             elif 'text' in message:
                 print("Получено текстовое сообщение.")
                 text_to_process = message['text']
 
-            # Если после всех проверок у нас есть текст для обработки, запускаем магию
             if text_to_process:
                 ai_data = process_with_deepseek(text_to_process)
                 
-                # Данные для Notion (общие для всей заметки)
                 notion_title = ai_data.get('main_title', 'Новая заметка')
                 notion_category = ai_data.get('category', 'Мысль')
                 
+                # --- НОВАЯ ЛОГИКА: ЛОГИРОВАНИЕ ДЕЙСТВИЙ ---
                 try:
-                    # В Notion создаем одну общую страницу
-                    create_notion_page(notion_title, text_to_process, notion_category)
+                    notion_page_id = create_notion_page(notion_title, text_to_process, notion_category)
+                    log_last_action(notion_page_id, None) # Логируем создание страницы
                     feedback_text = (f"✅ *Заметка в Notion создана!*\n\n*Название:* {notion_title}\n*Категория:* {notion_category}")
                     send_telegram_message(chat_id, feedback_text)
                 except Exception as e:
                     send_telegram_message(chat_id, f"❌ *Ошибка при создании заметки в Notion:*\n`{e}`")
 
-                # Данные для Google Calendar (список событий)
                 calendar_events = ai_data.get('events', [])
                 
                 if calendar_events:
                     created_events_titles = []
                     for event in calendar_events:
                         try:
-                            # В цикле создаем каждое событие в календаре
-                            create_google_calendar_event(event['title'], "", event['datetime_iso'])
+                            gcal_event_id = create_google_calendar_event(event['title'], "", event['datetime_iso'])
+                            log_last_action(None, gcal_event_id) # Логируем создание каждого события
                             created_events_titles.append(event['title'])
                         except Exception as e:
                             send_telegram_message(chat_id, f"❌ *Ошибка при создании события '{event['title']}':*\n`{e}`")
                     
-                    # Отправляем один общий отчет о созданных событиях
                     if created_events_titles:
-                        feedback_text = (
-                            f"📅 *Добавлено {len(created_events_titles)} события в Календарь:*\n"
-                            f"- " + "\n- ".join(created_events_titles)
-                        )
+                        feedback_text = (f"📅 *Добавлено {len(created_events_titles)} события в Календарь:*\n- " + "\n- ".join(created_events_titles))
                         send_telegram_message(chat_id, feedback_text)
 
         except Exception as e:
