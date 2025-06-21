@@ -133,7 +133,8 @@ def process_with_deepseek(text: str) -> dict:
     }
     response = requests.post(url, headers=headers, json=data)
     response.raise_for_status()
-    return response.json()['choices'][0]['message']['content']
+    json_string_from_ai = response.json()['choices'][0]['message']['content']
+    return json.loads(json_string_from_ai)
 
 def create_notion_page(title: str, content: str, category: str):
     """Создает новую страницу в базе данных Notion с иконкой."""
