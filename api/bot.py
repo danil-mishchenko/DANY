@@ -313,85 +313,58 @@ class handler(BaseHTTPRequestHandler):
             body = self.rfile.read(content_length)
             update = json.loads(body.decode('utf-8'))
 
-            if 'message' not in update:
-                self.send_response(200); self.end_headers(); return
-
+            if 'message' not in update: self.send_response(200); self.end_headers(); return
             message = update['message']
             user_id = str(message['from']['id'])
             chat_id = message['chat']['id']
 
-            if user_id != ALLOWED_TELEGRAM_ID:
-                self.send_response(200); self.end_headers(); return
+            if user_id != ALLOWED_TELEGRAM_ID: self.send_response(200); self.end_headers(); return
             
-            # Логика команды /undo остается без изменений
             if message.get('text') == '/undo':
-                # ... (здесь ваш рабочий код для /undo)
+                last_action = get_and_delete_last_log()
+                if last_action:
+                    if last_action.get('notion_page_id'): delete_notion_page(last_action['notion_page_id'])
+                    if last_action.get('gcal_event_id') and last_action.get('gcal_calendar_id'): delete_gcal_event(last_action['gcal_calendar_id'], last_action['gcal_event_id'])
+                    send_telegram_message(chat_id, "✅ Последнее действие отменено.")
+                else:
+                    send_telegram_message(chat_id, "🤔 Не найдено действий для отмены.")
                 self.send_response(200); self.end_headers(); return
 
             text_to_process = None
-
             if 'voice' in message:
                 audio_bytes = download_telegram_file(message['voice']['file_id']).read()
                 text_to_process = transcribe_with_assemblyai(audio_bytes)
-                if not text_to_process:
-                    send_telegram_message(chat_id, "❌ Не удалось распознать речь.")
-            
+                if not text_to_process: send_telegram_message(chat_id, "❌ Не удалось распознать речь.")
             elif 'text' in message:
                 text_to_process = message['text']
 
             if text_to_process:
                 ai_data = process_with_deepseek(text_to_process)
-    
-                # Получаем новые данные от ИИ
                 notion_title = ai_data.get('main_title', 'Новая заметка')
                 notion_category = ai_data.get('category', 'Мысль')
-                formatted_body = ai_data.get('formatted_body', text_to_process) # Новое поле!
-            
-                try:
-                    # В Notion передаем отформатированное тело заметки
-                    notion_page_id = create_notion_page(notion_title, formatted_body, notion_category)
-                    if notion_page_id:
-                        log_last_action(notion_page_id=notion_page_id)
-                    
-                    feedback_text = (f"✅ *Заметка в Notion создана!*\n\n*Название:* {notion_title}\n*Категория:* {notion_category}")
-                    send_telegram_message(chat_id, feedback_text)
-               except Exception as e:
-                    # В e.response.text содержится детальный JSON-ответ от Notion
-                    detailed_error = e.response.text if hasattr(e, 'response') else str(e)
-                    error_text = f"❌ *Ошибка при создании заметки в Notion:*\n\n<pre>{detailed_error}</pre>"
-                    
-                    # Отправляем сообщение с HTML-форматированием для лучшей читаемости
-                    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-                    payload = {'chat_id': chat_id, 'text': error_text, 'parse_mode': 'HTML'}
-                    requests.post(url, json=payload)
-                    
-                    print(f"Ошибка при создании страницы в Notion: {detailed_error}")
-                # --- УМНАЯ ОБРАБОТКА СОБЫТИЙ ДЛЯ КАЛЕНДАРЯ ---
-                calendar_events = ai_data.get('events', [])
+                formatted_body = ai_data.get('formatted_body', text_to_process)
                 
-                # 1. ФИЛЬТРУЕМ "ПУСТЫЕ" СОБЫТИЯ ОТ ИИ
-                # Оставляем только те, у которых есть и название, и дата
-                valid_events = [
-                    event for event in calendar_events 
-                    if event and event.get('title') and event.get('datetime_iso')
-                ]
+                try:
+                    notion_page_id = create_notion_page(notion_title, formatted_body, notion_category)
+                    if notion_page_id: log_last_action(notion_page_id=notion_page_id)
+                    send_telegram_message(chat_id, f"✅ *Заметка в Notion создана!*\n\n*Название:* {notion_title}\n*Категория:* {notion_category}")
+                except Exception as e:
+                    detailed_error = e.response.text if hasattr(e, 'response') else str(e)
+                    send_telegram_message(chat_id, f"❌ *Ошибка при создании заметки в Notion:*\n<pre>{detailed_error}</pre>", use_html=True)
 
-                # 2. Если после фильтрации остались реальные события, работаем с ними
+                valid_events = [event for event in ai_data.get('events', []) if event and event.get('title') and event.get('datetime_iso')]
                 if valid_events:
                     created_events_titles = []
                     for event in valid_events:
                         try:
-                            gcal_event_id = create_google_calendar_event(event['title'], "", event['datetime_iso'])
-                            if gcal_event_id:
-                                log_last_action(gcal_event_id=gcal_event_id)
+                            gcal_event_id = create_google_calendar_event(event['title'], formatted_body, event['datetime_iso'])
+                            if gcal_event_id: log_last_action(gcal_event_id=gcal_event_id)
                             created_events_titles.append(event['title'])
                         except Exception as e:
                             send_telegram_message(chat_id, f"❌ *Ошибка при создании события '{event['title']}':*\n`{e}`")
                     
-                    # 3. Отправляем отчет только если что-то реально было создано
                     if created_events_titles:
-                        feedback_text = (f"📅 *Добавлено {len(created_events_titles)} события в Календарь:*\n- " + "\n- ".join(created_events_titles))
-                        send_telegram_message(chat_id, feedback_text)
+                        send_telegram_message(chat_id, f"📅 *Добавлено {len(created_events_titles)} события в Календарь:*\n- " + "\n- ".join(created_events_titles))
 
         except Exception as e:
             if chat_id:
