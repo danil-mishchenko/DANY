@@ -355,9 +355,17 @@ class handler(BaseHTTPRequestHandler):
                     
                     feedback_text = (f"✅ *Заметка в Notion создана!*\n\n*Название:* {notion_title}\n*Категория:* {notion_category}")
                     send_telegram_message(chat_id, feedback_text)
-                except Exception as e:
-                    send_telegram_message(chat_id, f"❌ *Ошибка при создании заметки в Notion:*\n`{e}`")
-
+               except Exception as e:
+                    # В e.response.text содержится детальный JSON-ответ от Notion
+                    detailed_error = e.response.text if hasattr(e, 'response') else str(e)
+                    error_text = f"❌ *Ошибка при создании заметки в Notion:*\n\n<pre>{detailed_error}</pre>"
+                    
+                    # Отправляем сообщение с HTML-форматированием для лучшей читаемости
+                    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+                    payload = {'chat_id': chat_id, 'text': error_text, 'parse_mode': 'HTML'}
+                    requests.post(url, json=payload)
+                    
+                    print(f"Ошибка при создании страницы в Notion: {detailed_error}")
                 # --- УМНАЯ ОБРАБОТКА СОБЫТИЙ ДЛЯ КАЛЕНДАРЯ ---
                 calendar_events = ai_data.get('events', [])
                 
