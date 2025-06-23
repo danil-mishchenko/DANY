@@ -115,6 +115,18 @@ def send_telegram_message(chat_id: str, text: str, use_html: bool = False, add_u
     except Exception as e:
         print(f"Ошибка при отправке сообщения в Telegram: {e}")
 
+def get_latest_notes(limit: int = 3):
+    """Запрашивает у Notion последние N страниц из основной базы данных."""
+    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
+    payload = {
+        "sorts": [{"timestamp": "created_time", "direction": "descending"}],
+        "page_size": limit
+    }
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    response = requests.post(url, headers=headers, json=payload)
+    response.raise_for_status()
+    return response.json().get('results', [])
+
 # --- НОВЫЕ ФУНКЦИИ ДЛЯ ПОИСКА ---
 
 def search_notion_pages(query: str):
@@ -381,7 +393,7 @@ def delete_notion_page(page_id):
         
 # --- Основной обработчик с "Фейс-контролем" ---
 
-# --- Основной обработчик с новой командой /search ---
+# --- Основной обработчик со всеми функциями: создание, отмена, поиск, список и удаление ---
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         chat_id = None
@@ -399,8 +411,10 @@ class handler(BaseHTTPRequestHandler):
                 callback_data = callback_query['data']
                 chat_id = callback_query['message']['chat']['id']
                 callback_query_id = callback_query['id']
+                # Сразу отвечаем Telegram, чтобы кнопка перестала "грузиться"
                 requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery?callback_query_id={callback_query_id}")
 
+                # Логика для общей кнопки "Отменить"
                 if callback_data == 'undo_last_action':
                     last_action = get_and_delete_last_log()
                     if last_action:
@@ -409,6 +423,16 @@ class handler(BaseHTTPRequestHandler):
                         send_telegram_message(chat_id, "✅ Последнее действие отменено.")
                     else:
                         send_telegram_message(chat_id, "🤔 Не найдено действий для отмены.")
+                
+                # НОВАЯ ЛОГИКА: обработка кнопок удаления конкретной заметки
+                elif callback_data.startswith('delete_notion_'):
+                    page_id_to_delete = callback_data.split('_', 2)[2]
+                    try:
+                        delete_notion_page(page_id_to_delete)
+                        send_telegram_message(chat_id, f"🗑️ Заметка удалена.")
+                    except Exception as e:
+                        send_telegram_message(chat_id, f"❌ Не удалось удалить заметку. Ошибка: {e}")
+
                 self.send_response(200); self.end_headers(); return
 
             # --- ОБРАБОТКА СООБЩЕНИЙ ---
@@ -423,15 +447,33 @@ class handler(BaseHTTPRequestHandler):
             
             text = message.get('text', '')
 
-            # --- НОВАЯ ЛОГИКА ДЛЯ КОМАНДЫ /search ---
-            if text.startswith('/search '):
+            # --- ПРОВЕРКА КОМАНД ---
+            if text == '/notes':
+                send_telegram_message(chat_id, "🔎 Ищу 3 последние заметки...")
+                latest_notes = get_latest_notes(3)
+                if not latest_notes:
+                    send_telegram_message(chat_id, "😔 Заметок пока нет.")
+                else:
+                    send_telegram_message(chat_id, f"👇 Вот что я нашел:")
+                    for note in latest_notes:
+                        page_id = note['id']
+                        title_parts = note.get('properties', {}).get('Name', {}).get('title', [])
+                        page_title = title_parts[0]['plain_text'] if title_parts else "Без названия"
+                        
+                        keyboard = {"inline_keyboard": [[{"text": "🗑️ Удалить", "callback_data": f"delete_notion_{page_id}"}]]}
+                        
+                        message_text = f"*{page_title}*"
+                        payload = {'chat_id': chat_id, 'text': message_text, 'parse_mode': 'Markdown', 'reply_markup': json.dumps(keyboard)}
+                        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json=payload)
+                self.send_response(200); self.end_headers(); return
+
+            elif text.startswith('/search '):
                 query = text.split(' ', 1)[1]
                 if not query:
                     send_telegram_message(chat_id, "Пожалуйста, укажите, что нужно найти после команды /search.")
                     self.send_response(200); self.end_headers(); return
                 
                 send_telegram_message(chat_id, f"🔎 Ищу заметки по запросу: *{query}*...")
-                
                 search_results = search_notion_pages(query)
                 
                 if not search_results:
@@ -446,15 +488,16 @@ class handler(BaseHTTPRequestHandler):
                     self.send_response(200); self.end_headers(); return
 
                 answer = summarize_for_search(page_content, query)
-                
                 page_title = search_results[0].get('properties', {}).get('Name', {}).get('title', [{}])[0].get('plain_text', 'Без названия')
                 final_response = f"💡 *Результат поиска по заметке «{page_title}»*:\n\n{answer}"
                 send_telegram_message(chat_id, final_response)
-                
                 self.send_response(200); self.end_headers(); return
-            # --- КОНЕЦ ЛОГИКИ /search ---
-
-            # --- СТАРАЯ ЛОГИКА ДЛЯ СОЗДАНИЯ ЗАМЕТОК ---
+            
+            elif text == '/undo':
+                send_telegram_message(chat_id, "Пожалуйста, используйте кнопку '↩️ Отменить' под сообщением.")
+                self.send_response(200); self.end_headers(); return
+            
+            # --- ЛОГИКА СОЗДАНИЯ НОВОЙ ЗАМЕТКИ (если это не команда) ---
             text_to_process = None
             if 'voice' in message:
                 audio_bytes = download_telegram_file(message['voice']['file_id']).read()
@@ -490,7 +533,7 @@ class handler(BaseHTTPRequestHandler):
                     
                     if created_events_titles:
                         send_telegram_message(chat_id, f"📅 *Добавлено {len(created_events_titles)} события в Календарь:*\n- " + "\n- ".join(created_events_titles), add_undo_button=True)
-            
+
         except Exception as e:
             if chat_id:
                 send_telegram_message(chat_id, f"🤯 *Произошла глобальная ошибка!*\nПожалуйста, проверьте логи Vercel.\n`{e}`")
