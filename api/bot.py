@@ -394,6 +394,57 @@ def delete_notion_page(page_id):
 # --- Основной обработчик с "Фейс-контролем" ---
 
 # --- Основной обработчик со всеми функциями: создание, отмена, поиск, список и удаление ---
+# --- ФИНАЛЬНЫЙ ОБРАБОТЧИК И ВСЕ ЕГО ПОМОЩНИКИ ---
+
+def set_user_state(user_id: str, state: str, page_id: str):
+    """Создает запись о намерении пользователя в лог-базе."""
+    properties = {
+        'Name': {'title': [{'type': 'text', 'text': {'content': f"State for {user_id}: {state}"}}]},
+        'UserID': {'rich_text': [{'type': 'text', 'text': {'content': user_id}}]},
+        'NotionPageID': {'rich_text': [{'type': 'text', 'text': {'content': page_id}}]},
+        'State': {'select': {'name': state}}
+    }
+    log_last_action(properties=properties)
+
+def get_user_state(user_id: str):
+    """Проверяет, есть ли для пользователя активное состояние, и удаляет его."""
+    log_db_id = os.getenv('NOTION_LOG_DB_ID')
+    if not log_db_id: return None
+    
+    payload = {
+        "filter": {"and": [ {"property": "UserID", "rich_text": {"equals": user_id}}, {"property": "State", "select": {"is_not_empty": True}} ]},
+        "sorts": [{"timestamp": "created_time", "direction": "descending"}], "page_size": 1
+    }
+    query_url = f"https://api.notion.com/v1/databases/{log_db_id}/query"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    response = requests.post(query_url, headers=headers, json=payload)
+    results = response.json().get('results', [])
+
+    if not results: return None
+    
+    state_page = results[0]
+    state_page_id = state_page['id']
+    properties = state_page['properties']
+    
+    def get_text(prop): return prop['rich_text'][0]['text']['content'] if prop.get('rich_text') else None
+    
+    state_details = {
+        'state': properties.get('State', {}).get('select', {}).get('name'),
+        'page_id': get_text(properties.get('NotionPageID'))
+    }
+    
+    delete_notion_page(state_page_id) # Удаляем запись о состоянии, т.к. мы ее обработаем
+    return state_details
+
+def add_to_notion_page(page_id: str, text_to_add: str):
+    """Добавляет новые блоки текста в конец страницы Notion."""
+    url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    new_blocks = parse_to_notion_blocks(text_to_add)
+    payload = {'children': new_blocks}
+    requests.patch(url, headers=headers, json=payload).raise_for_status()
+
+
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         chat_id = None
@@ -402,11 +453,9 @@ class handler(BaseHTTPRequestHandler):
             body = self.rfile.read(content_length)
             update = json.loads(body.decode('utf-8'))
 
-            # Определяем, есть ли в обновлении сообщение или нажатие кнопки
             message = update.get('message')
             callback_query = update.get('callback_query')
 
-            # --- ОБРАБОТКА НАЖАТИЯ КНОПОК ---
             if callback_query:
                 callback_data = callback_query['data']
                 chat_id = callback_query['message']['chat']['id']
@@ -432,10 +481,13 @@ class handler(BaseHTTPRequestHandler):
                         send_telegram_message(chat_id, f"🗑️ Заметка удалена.")
                     except Exception as e:
                         send_telegram_message(chat_id, f"❌ Не удалось удалить заметку. Ошибка: {e}")
-
+                # НОВАЯ ЛОГИКА: обработка кнопок добавления
+                elif callback_data.startswith('add_to_notion_'):
+                    page_id = callback_data.split('_', 3)[3]
+                    set_user_state(str(chat_id), 'awaiting_add_text', page_id)
+                    send_telegram_message(chat_id, "▶️ Введите текст, который нужно *добавить* в конец заметки:")
                 self.send_response(200); self.end_headers(); return
 
-            # --- ОБРАБОТКА СООБЩЕНИЙ ---
             if not message:
                 self.send_response(200); self.end_headers(); return
 
@@ -445,8 +497,22 @@ class handler(BaseHTTPRequestHandler):
             if user_id != ALLOWED_TELEGRAM_ID:
                 self.send_response(200); self.end_headers(); return
             
+            # --- НОВАЯ ЛОГИКА: ПРОВЕРКА СОСТОЯНИЯ ПЕРЕД ВСЕМ ОСТАЛЬНЫМ ---
+            user_state = get_user_state(user_id)
+            if user_state:
+                if user_state.get('state') == 'awaiting_add_text':
+                    page_id_to_edit = user_state['page_id']
+                    text_to_add = message.get('text', '')
+                    if text_to_add:
+                        add_to_notion_page(page_id_to_edit, text_to_add)
+                        send_telegram_message(chat_id, "✅ Текст успешно добавлен в заметку!")
+                    else:
+                        send_telegram_message(chat_id, "Отмена. Получено пустое сообщение.")
+                    self.send_response(200); self.end_headers(); return
+            # --- КОНЕЦ ПРОВЕРКИ СОСТОЯНИЯ ---
+            
             text = message.get('text', '')
-
+            
             # --- ПРОВЕРКА КОМАНД ---
             if text == '/notes':
                 send_telegram_message(chat_id, "🔎 Ищу 3 последние заметки...")
@@ -460,8 +526,10 @@ class handler(BaseHTTPRequestHandler):
                         title_parts = note.get('properties', {}).get('Name', {}).get('title', [])
                         page_title = title_parts[0]['plain_text'] if title_parts else "Без названия"
                         
-                        keyboard = {"inline_keyboard": [[{"text": "🗑️ Удалить", "callback_data": f"delete_notion_{page_id}"}]]}
-                        
+                        keyboard = {"inline_keyboard": [[
+                            {"text": "➕ Добавить", "callback_data": f"add_to_notion_{page_id}"},
+                            {"text": "🗑️ Удалить", "callback_data": f"delete_notion_{page_id}"}
+                        ]]}
                         message_text = f"*{page_title}*"
                         payload = {'chat_id': chat_id, 'text': message_text, 'parse_mode': 'Markdown', 'reply_markup': json.dumps(keyboard)}
                         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json=payload)
@@ -492,11 +560,11 @@ class handler(BaseHTTPRequestHandler):
                 final_response = f"💡 *Результат поиска по заметке «{page_title}»*:\n\n{answer}"
                 send_telegram_message(chat_id, final_response)
                 self.send_response(200); self.end_headers(); return
-            
+                
             elif text == '/undo':
                 send_telegram_message(chat_id, "Пожалуйста, используйте кнопку '↩️ Отменить' под сообщением.")
                 self.send_response(200); self.end_headers(); return
-            
+                
             # --- ЛОГИКА СОЗДАНИЯ НОВОЙ ЗАМЕТКИ (если это не команда) ---
             text_to_process = None
             if 'voice' in message:
