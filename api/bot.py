@@ -224,49 +224,60 @@ def summarize_for_search(context: str, question: str) -> str:
 
 
 def parse_to_notion_blocks(formatted_text: str) -> list:
-    """Превращает текст в нативные блоки Notion, включая закладки, списки и параграфы с форматированием."""
+    """
+    Превращает текст в нативные блоки Notion, корректно чередуя закладки, списки и параграфы.
+    """
     blocks = []
-    
-    # 1. Сначала ищем все URL в тексте, чтобы сделать из них закладки
-    url_pattern = r'https?://\S+'
-    urls = re.findall(url_pattern, formatted_text)
-    
-    # Текст без URL-адресов
-    text_without_urls = re.sub(url_pattern, '', formatted_text)
+    # Паттерн для определения, является ли строка URL-адресом
+    url_pattern = re.compile(r'^https?://\S+$')
 
-    # 2. Создаем блоки для остального текста (параграфы и списки)
-    for line in text_without_urls.split('\n'):
-        if not line.strip(): continue
+    for line in formatted_text.split('\n'):
+        stripped_line = line.strip()
+        if not stripped_line:
+            continue # Пропускаем пустые строки
 
-        is_bullet_item = line.strip().startswith('- ')
+        # 1. Проверяем, является ли вся строка URL-адресом
+        if url_pattern.match(stripped_line):
+            blocks.append({
+                "object": "block",
+                "type": "bookmark",
+                "bookmark": {"url": stripped_line}
+            })
+            continue
+
+        # 2. Если не URL, проверяем, является ли это элементом списка
+        is_bullet_item = stripped_line.startswith('- ')
         block_type = "bulleted_list_item" if is_bullet_item else "paragraph"
-        clean_line = line.strip().lstrip('- ') if is_bullet_item else line
         
-        # Парсим inline-форматирование (жирный/курсив)
+        # Убираем маркер списка для дальнейшей обработки
+        clean_line = stripped_line.lstrip('- ') if is_bullet_item else stripped_line
+        
+        # 3. Парсим inline-форматирование (жирный/курсив) внутри строки
         rich_text_objects = []
         parts = re.split(r'(\*\*.*?\*\*|\*.*?\*)', clean_line)
-        for part in filter(None, parts):
+        
+        for part in filter(None, parts): # filter(None, parts) убирает пустые строки из списка
             is_bold = part.startswith('**') and part.endswith('**')
             is_italic = part.startswith('*') and part.endswith('*')
+            
             content = part.strip('**').strip('*')
             annotations = {"bold": is_bold, "italic": is_italic}
-            rich_text_objects.append({"type": "text", "text": {"content": content}, "annotations": annotations})
 
+            rich_text_objects.append({
+                "type": "text",
+                "text": {"content": content},
+                "annotations": annotations
+            })
+
+        # 4. Собираем и добавляем финальный блок (список или параграф)
         if rich_text_objects:
             if block_type == "bulleted_list_item":
                 blocks.append({"object": "block", "type": block_type, "bulleted_list_item": {"rich_text": rich_text_objects}})
             else:
                 blocks.append({"object": "block", "type": block_type, "paragraph": {"rich_text": rich_text_objects}})
-
-    # 3. Добавляем блоки закладок для найденных URL
-    for url in urls:
-        blocks.append({
-            "object": "block",
-            "type": "bookmark",
-            "bookmark": {"url": url}
-        })
-        
+            
     return blocks
+
     
 def process_with_deepseek(text: str) -> dict:
     """Отправляет текст в DeepSeek для умного форматирования и извлечения данных."""
