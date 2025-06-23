@@ -115,7 +115,7 @@ def send_telegram_message(chat_id: str, text: str, use_html: bool = False, add_u
     except Exception as e:
         print(f"Ошибка при отправке сообщения в Telegram: {e}")
 
-def get_latest_notes(limit: int = 3):
+def get_latest_notes(limit: int = 5):
     """Запрашивает у Notion последние N страниц из основной базы данных."""
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
     payload = {
