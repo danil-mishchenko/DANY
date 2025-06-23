@@ -578,6 +578,8 @@ class handler(BaseHTTPRequestHandler):
             # --- ЛОГИКА СОЗДАНИЯ НОВОЙ ЗАМЕТКИ (если это не команда) ---
             text_to_process = None
             if 'voice' in message:
+                # --- НОВОЕ: Отправляем сообщение о начале работы ---
+                send_telegram_message(chat_id, "⏳ Распознаю речь...")
                 audio_bytes = download_telegram_file(message['voice']['file_id']).read()
                 text_to_process = transcribe_with_assemblyai(audio_bytes)
                 if not text_to_process: send_telegram_message(chat_id, "❌ Не удалось распознать речь.")
@@ -585,6 +587,9 @@ class handler(BaseHTTPRequestHandler):
                 text_to_process = message['text']
 
             if text_to_process:
+                # --- НОВОЕ: Отправляем сообщение о начале работы ---
+                send_telegram_message(chat_id, "⏳ Анализирую и форматирую заметку...")
+                
                 ai_data = process_with_deepseek(text_to_process)
                 notion_title = ai_data.get('main_title', 'Новая заметка')
                 notion_category = ai_data.get('category', 'Мысль')
