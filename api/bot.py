@@ -366,21 +366,34 @@ def get_and_delete_last_log():
     print(f"Получены и удалены детали последнего действия: {action_details}")
     return action_details
 
-def log_last_action(notion_page_id: str = None, gcal_event_id: str = None):
-    """Записывает ID последних созданных объектов в лог-базу Notion."""
+def log_last_action(properties: dict = None, notion_page_id: str = None, gcal_event_id: str = None):
+    """Записывает действие или состояние в лог-базу Notion.
+    Может принимать либо готовый словарь properties, либо ID для его создания.
+    """
     log_db_id = os.getenv('NOTION_LOG_DB_ID')
+    if not log_db_id:
+        print("ОШИБКА ЛОГИРОВАНИЯ: Переменная NOTION_LOG_DB_ID не найдена.")
+        return
+
+    # Если готовые properties не переданы, создаем их по старой схеме
+    if properties is None:
+        properties = {
+            'Name': {'title': [{'type': 'text', 'text': {'content': f"Action at {datetime.now()}"}}]},
+            'NotionPageID': {'rich_text': [{'type': 'text', 'text': {'content': notion_page_id or ""}}]},
+            'GCalEventID': {'rich_text': [{'type': 'text', 'text': {'content': gcal_event_id or ""}}]},
+            'GCalCalendarID': {'rich_text': [{'type': 'text', 'text': {'content': os.getenv('GOOGLE_CALENDAR_ID') or ""}}]}
+        }
+
     url = 'https://api.notion.com/v1/pages'
     headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
-
-    properties = {
-        'Name': {'title': [{'type': 'text', 'text': {'content': f"Action at {datetime.now()}"}}]}, # Главная колонка
-        'NotionPageID': {'rich_text': [{'type': 'text', 'text': {'content': notion_page_id or ""}}]},
-        'GCalEventID': {'rich_text': [{'type': 'text', 'text': {'content': gcal_event_id or ""}}]},
-        'GCalCalendarID': {'rich_text': [{'type': 'text', 'text': {'content': os.getenv('GOOGLE_CALENDAR_ID') or ""}}]}
-    }
     payload = {'parent': {'database_id': log_db_id}, 'properties': properties}
-    requests.post(url, headers=headers, json=payload)
-    print("Действие успешно залогировано.")
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        print(f"Действие успешно залогировано: {properties.get('Name', {}).get('title', [{}])[0].get('text', {}).get('content')}")
+    except Exception as e:
+        print(f"КРИТИЧЕСКАЯ ОШИБКА ЛОГИРОВАНИЯ: {e}")
 
 def delete_notion_page(page_id):
     """Архивирует (удаляет) страницу в Notion."""
@@ -391,9 +404,6 @@ def delete_notion_page(page_id):
     print(f"Страница Notion {page_id} удалена.")
 
         
-# --- Основной обработчик с "Фейс-контролем" ---
-
-# --- Основной обработчик со всеми функциями: создание, отмена, поиск, список и удаление ---
 # --- ФИНАЛЬНЫЙ ОБРАБОТЧИК И ВСЕ ЕГО ПОМОЩНИКИ ---
 
 def set_user_state(user_id: str, state: str, page_id: str):
