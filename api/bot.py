@@ -115,6 +115,37 @@ def send_telegram_message(chat_id: str, text: str, use_html: bool = False, add_u
     except Exception as e:
         print(f"Ошибка при отправке сообщения в Telegram: {e}")
 
+def send_initial_status_message(chat_id: str, text: str):
+    """Отправляет начальное сообщение и возвращает его ID для последующего редактирования."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown'}
+    try:
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        # Возвращаем ID отправленного сообщения
+        return response.json()['result']['message_id']
+    except Exception as e:
+        print(f"Ошибка при отправке начального сообщения: {e}")
+        return None
+
+def edit_telegram_message(chat_id: str, message_id: int, new_text: str, use_html: bool = False, add_undo_button: bool = False):
+    """Редактирует существующее сообщение в Telegram."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText"
+    payload = {
+        'chat_id': chat_id,
+        'message_id': message_id,
+        'text': new_text,
+        'parse_mode': 'HTML' if use_html else 'Markdown'
+    }
+    if add_undo_button:
+        keyboard = {"inline_keyboard": [[{"text": "↩️ Отменить", "callback_data": "undo_last_action"}]]}
+        payload['reply_markup'] = json.dumps(keyboard)
+    
+    try:
+        requests.post(url, json=payload).raise_for_status()
+    except Exception as e:
+        print(f"Ошибка при редактировании сообщения: {e}")
+
 def get_latest_notes(limit: int = 5):
     """Запрашивает у Notion последние N страниц из основной базы данных."""
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
@@ -576,36 +607,58 @@ class handler(BaseHTTPRequestHandler):
                 self.send_response(200); self.end_headers(); return
                 
             # --- ЛОГИКА СОЗДАНИЯ НОВОЙ ЗАМЕТКИ (если это не команда) ---
-            text_to_process = None
-            if 'voice' in message:
-                # --- НОВОЕ: Отправляем сообщение о начале работы ---
-                send_telegram_message(chat_id, "⏳ Распознаю речь...")
-                audio_bytes = download_telegram_file(message['voice']['file_id']).read()
-                text_to_process = transcribe_with_assemblyai(audio_bytes)
-                if not text_to_process: send_telegram_message(chat_id, "❌ Не удалось распознать речь.")
-            elif 'text' in message:
-                text_to_process = message['text']
-
             if text_to_process:
-                # --- НОВОЕ: Отправляем сообщение о начале работы ---
-                send_telegram_message(chat_id, "⏳ Анализирую и форматирую заметку...")
+                # Определяем, было ли это голосовое сообщение или текстовое
+                is_text_message = 'voice' not in message
+
+                status_message_id = None
+                # Анимацию показываем только для текстовых сообщений
+                if is_text_message:
+                    progress_bar = "⬜️⬜️⬜️⬜️⬜️⬜️ 0%"
+                    status_message_id = send_initial_status_message(chat_id, f"⏳ Анализирую...\n`{progress_bar}`")
+
+                # --- ЭТАП 1: ОБРАЩЕНИЕ К DEEPSEEK ---
+                if status_message_id:
+                    progress_bar = "🟩🟩⬜️⬜️⬜️⬜️ 33%"
+                    edit_telegram_message(chat_id, status_message_id, f"⏳ Анализирую...\n`{progress_bar}`")
                 
                 ai_data = process_with_deepseek(text_to_process)
                 notion_title = ai_data.get('main_title', 'Новая заметка')
                 notion_category = ai_data.get('category', 'Мысль')
                 formatted_body = ai_data.get('formatted_body', text_to_process)
                 
+                # --- ЭТАП 2: СОЗДАНИЕ ЗАМЕТКИ В NOTION ---
+                if status_message_id:
+                    progress_bar = "🟩🟩🟩🟩⬜️⬜️ 66%"
+                    edit_telegram_message(chat_id, status_message_id, f"⏳ Сохраняю в Notion...\n`{progress_bar}`")
+
                 try:
                     notion_page_id = create_notion_page(notion_title, formatted_body, notion_category)
                     if notion_page_id: log_last_action(notion_page_id=notion_page_id)
-                    send_telegram_message(chat_id, f"✅ *Заметка в Notion создана!*\n\n*Название:* {notion_title}\n*Категория:* {notion_category}", add_undo_button=True)
+                    
+                    # Если это было голосовое, отправляем обычный отчет
+                    if not is_text_message:
+                        feedback_text = (f"✅ *Заметка в Notion создана!*\n\n*Название:* {notion_title}\n*Категория:* {notion_category}")
+                        send_telegram_message(chat_id, feedback_text, add_undo_button=True)
+
                 except Exception as e:
                     detailed_error = e.response.text if hasattr(e, 'response') else str(e)
-                    send_telegram_message(chat_id, f"❌ *Ошибка при создании заметки в Notion:*\n<pre>{detailed_error}</pre>", use_html=True)
+                    final_text = f"❌ *Ошибка при создании заметки в Notion:*\n<pre>{detailed_error}</pre>"
+                    if status_message_id:
+                        edit_telegram_message(chat_id, status_message_id, final_text, use_html=True)
+                    else:
+                        send_telegram_message(chat_id, final_text, use_html=True)
+                    # Прерываем выполнение, если Notion не сработал
+                    self.send_response(200); self.end_headers(); return
 
+                # --- ЭТАП 3: СОЗДАНИЕ СОБЫТИЙ В КАЛЕНДАРЕ ---
                 valid_events = [event for event in ai_data.get('events', []) if event and event.get('title') and event.get('datetime_iso')]
+                created_events_titles = []
                 if valid_events:
-                    created_events_titles = []
+                    if status_message_id:
+                        progress_bar = "🟩🟩🟩🟩🟩🟩 99%"
+                        edit_telegram_message(chat_id, status_message_id, f"⏳ Добавляю в календарь...\n`{progress_bar}`")
+
                     for event in valid_events:
                         try:
                             gcal_event_id = create_google_calendar_event(event['title'], formatted_body, event['datetime_iso'])
@@ -613,9 +666,18 @@ class handler(BaseHTTPRequestHandler):
                             created_events_titles.append(event['title'])
                         except Exception as e:
                             send_telegram_message(chat_id, f"❌ *Ошибка при создании события '{event['title']}':*\n`{e}`")
-                    
-                    if created_events_titles:
-                        send_telegram_message(chat_id, f"📅 *Добавлено {len(created_events_titles)} события в Календарь:*\n- " + "\n- ".join(created_events_titles), add_undo_button=True)
+                
+                # --- ФИНАЛЬНЫЙ ОТЧЕТ ---
+                final_report_text = f"✅ *Заметка «{notion_title}» создана!*\n_Категория: {notion_category}_"
+                if created_events_titles:
+                    final_report_text += "\n\n📅 *Добавлено в календарь:*\n- " + "\n- ".join(created_events_titles)
+
+                if status_message_id:
+                    edit_telegram_message(chat_id, status_message_id, final_report_text, add_undo_button=True)
+                # Если это было голосовое, отправляем отдельный отчет о календаре
+                elif created_events_titles:
+                    calendar_feedback = f"📅 *Добавлено {len(created_events_titles)} события в Календарь:*\n- " + "\n- ".join(created_events_titles)
+                    send_telegram_message(chat_id, calendar_feedback, add_undo_button=True)
 
         except Exception as e:
             if chat_id:
