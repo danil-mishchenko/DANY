@@ -497,14 +497,13 @@ class handler(BaseHTTPRequestHandler):
             message = update.get('message')
             callback_query = update.get('callback_query')
 
+            # --- ОБРАБОТКА НАЖАТИЯ КНОПОК ---
             if callback_query:
                 callback_data = callback_query['data']
                 chat_id = callback_query['message']['chat']['id']
                 callback_query_id = callback_query['id']
-                # Сразу отвечаем Telegram, чтобы кнопка перестала "грузиться"
                 requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery?callback_query_id={callback_query_id}")
 
-                # Логика для общей кнопки "Отменить"
                 if callback_data == 'undo_last_action':
                     last_action = get_and_delete_last_log()
                     if last_action:
@@ -514,7 +513,6 @@ class handler(BaseHTTPRequestHandler):
                     else:
                         send_telegram_message(chat_id, "🤔 Не найдено действий для отмены.")
                 
-                # НОВАЯ ЛОГИКА: обработка кнопок удаления конкретной заметки
                 elif callback_data.startswith('delete_notion_'):
                     page_id_to_delete = callback_data.split('_', 2)[2]
                     try:
@@ -522,13 +520,15 @@ class handler(BaseHTTPRequestHandler):
                         send_telegram_message(chat_id, f"🗑️ Заметка удалена.")
                     except Exception as e:
                         send_telegram_message(chat_id, f"❌ Не удалось удалить заметку. Ошибка: {e}")
-                # НОВАЯ ЛОГИКА: обработка кнопок добавления
+
                 elif callback_data.startswith('add_to_notion_'):
                     page_id = callback_data.split('_', 3)[3]
                     set_user_state(str(chat_id), 'awaiting_add_text', page_id)
                     send_telegram_message(chat_id, "▶️ Введите текст, который нужно *добавить* в конец заметки:")
+                
                 self.send_response(200); self.end_headers(); return
 
+            # --- ОБРАБОТКА СООБЩЕНИЙ ---
             if not message:
                 self.send_response(200); self.end_headers(); return
 
@@ -538,7 +538,7 @@ class handler(BaseHTTPRequestHandler):
             if user_id != ALLOWED_TELEGRAM_ID:
                 self.send_response(200); self.end_headers(); return
             
-            # --- НОВАЯ ЛОГИКА: ПРОВЕРКА СОСТОЯНИЯ ПЕРЕД ВСЕМ ОСТАЛЬНЫМ ---
+            # ПРОВЕРКА СОСТОЯНИЯ: не ждем ли мы текст для добавления?
             user_state = get_user_state(user_id)
             if user_state:
                 if user_state.get('state') == 'awaiting_add_text':
@@ -550,11 +550,10 @@ class handler(BaseHTTPRequestHandler):
                     else:
                         send_telegram_message(chat_id, "Отмена. Получено пустое сообщение.")
                     self.send_response(200); self.end_headers(); return
-            # --- КОНЕЦ ПРОВЕРКИ СОСТОЯНИЯ ---
             
             text = message.get('text', '')
             
-            # --- ПРОВЕРКА КОМАНД ---
+            # ПРОВЕРКА КОМАНД
             if text == '/notes':
                 send_telegram_message(chat_id, "🔎 Ищу 3 последние заметки...")
                 latest_notes = get_latest_notes(3)
@@ -566,11 +565,7 @@ class handler(BaseHTTPRequestHandler):
                         page_id = note['id']
                         title_parts = note.get('properties', {}).get('Name', {}).get('title', [])
                         page_title = title_parts[0]['plain_text'] if title_parts else "Без названия"
-                        
-                        keyboard = {"inline_keyboard": [[
-                            {"text": "➕ Добавить", "callback_data": f"add_to_notion_{page_id}"},
-                            {"text": "🗑️ Удалить", "callback_data": f"delete_notion_{page_id}"}
-                        ]]}
+                        keyboard = {"inline_keyboard": [[ {"text": "➕ Добавить", "callback_data": f"add_to_notion_{page_id}"}, {"text": "🗑️ Удалить", "callback_data": f"delete_notion_{page_id}"} ]]}
                         message_text = f"*{page_title}*"
                         payload = {'chat_id': chat_id, 'text': message_text, 'parse_mode': 'Markdown', 'reply_markup': json.dumps(keyboard)}
                         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json=payload)
@@ -584,14 +579,12 @@ class handler(BaseHTTPRequestHandler):
                 
                 send_telegram_message(chat_id, f"🔎 Ищу заметки по запросу: *{query}*...")
                 search_results = search_notion_pages(query)
-                
                 if not search_results:
                     send_telegram_message(chat_id, "😔 Ничего не найдено по вашему запросу.")
                     self.send_response(200); self.end_headers(); return
 
                 top_result_id = search_results[0]['id']
                 page_content = get_notion_page_content(top_result_id)
-
                 if not page_content:
                     send_telegram_message(chat_id, "🤔 Нашел подходящую заметку, но она пуста.")
                     self.send_response(200); self.end_headers(); return
@@ -607,17 +600,25 @@ class handler(BaseHTTPRequestHandler):
                 self.send_response(200); self.end_headers(); return
                 
             # --- ЛОГИКА СОЗДАНИЯ НОВОЙ ЗАМЕТКИ (если это не команда) ---
-            if text_to_process:
-                # Определяем, было ли это голосовое сообщение или текстовое
-                is_text_message = 'voice' not in message
+            # 1. СНАЧАЛА ОПРЕДЕЛЯЕМ, КАКОЙ ТЕКСТ ОБРАБАТЫВАТЬ
+            text_to_process = None
+            is_text_message = False
+            if 'voice' in message:
+                send_telegram_message(chat_id, "⏳ Распознаю речь...")
+                audio_bytes = download_telegram_file(message['voice']['file_id']).read()
+                text_to_process = transcribe_with_assemblyai(audio_bytes)
+                if not text_to_process: send_telegram_message(chat_id, "❌ Не удалось распознать речь.")
+            elif 'text' in message:
+                is_text_message = True
+                text_to_process = message['text']
 
+            # 2. И ТОЛЬКО ПОТОМ, ЕСЛИ ТЕКСТ ЕСТЬ, ЗАПУСКАЕМ ОБРАБОТКУ
+            if text_to_process:
                 status_message_id = None
-                # Анимацию показываем только для текстовых сообщений
                 if is_text_message:
                     progress_bar = "⬜️⬜️⬜️⬜️⬜️⬜️ 0%"
                     status_message_id = send_initial_status_message(chat_id, f"⏳ Анализирую...\n`{progress_bar}`")
 
-                # --- ЭТАП 1: ОБРАЩЕНИЕ К DEEPSEEK ---
                 if status_message_id:
                     progress_bar = "🟩🟩⬜️⬜️⬜️⬜️ 33%"
                     edit_telegram_message(chat_id, status_message_id, f"⏳ Анализирую...\n`{progress_bar}`")
@@ -627,7 +628,6 @@ class handler(BaseHTTPRequestHandler):
                 notion_category = ai_data.get('category', 'Мысль')
                 formatted_body = ai_data.get('formatted_body', text_to_process)
                 
-                # --- ЭТАП 2: СОЗДАНИЕ ЗАМЕТКИ В NOTION ---
                 if status_message_id:
                     progress_bar = "🟩🟩🟩🟩⬜️⬜️ 66%"
                     edit_telegram_message(chat_id, status_message_id, f"⏳ Сохраняю в Notion...\n`{progress_bar}`")
@@ -635,30 +635,21 @@ class handler(BaseHTTPRequestHandler):
                 try:
                     notion_page_id = create_notion_page(notion_title, formatted_body, notion_category)
                     if notion_page_id: log_last_action(notion_page_id=notion_page_id)
-                    
-                    # Если это было голосовое, отправляем обычный отчет
                     if not is_text_message:
-                        feedback_text = (f"✅ *Заметка в Notion создана!*\n\n*Название:* {notion_title}\n*Категория:* {notion_category}")
-                        send_telegram_message(chat_id, feedback_text, add_undo_button=True)
-
+                        send_telegram_message(chat_id, f"✅ *Заметка в Notion создана!*\n\n*Название:* {notion_title}\n*Категория:* {notion_category}", add_undo_button=True)
                 except Exception as e:
                     detailed_error = e.response.text if hasattr(e, 'response') else str(e)
                     final_text = f"❌ *Ошибка при создании заметки в Notion:*\n<pre>{detailed_error}</pre>"
-                    if status_message_id:
-                        edit_telegram_message(chat_id, status_message_id, final_text, use_html=True)
-                    else:
-                        send_telegram_message(chat_id, final_text, use_html=True)
-                    # Прерываем выполнение, если Notion не сработал
+                    if status_message_id: edit_telegram_message(chat_id, status_message_id, final_text, use_html=True)
+                    else: send_telegram_message(chat_id, final_text, use_html=True)
                     self.send_response(200); self.end_headers(); return
 
-                # --- ЭТАП 3: СОЗДАНИЕ СОБЫТИЙ В КАЛЕНДАРЕ ---
                 valid_events = [event for event in ai_data.get('events', []) if event and event.get('title') and event.get('datetime_iso')]
                 created_events_titles = []
                 if valid_events:
                     if status_message_id:
                         progress_bar = "🟩🟩🟩🟩🟩🟩 99%"
                         edit_telegram_message(chat_id, status_message_id, f"⏳ Добавляю в календарь...\n`{progress_bar}`")
-
                     for event in valid_events:
                         try:
                             gcal_event_id = create_google_calendar_event(event['title'], formatted_body, event['datetime_iso'])
@@ -667,18 +658,13 @@ class handler(BaseHTTPRequestHandler):
                         except Exception as e:
                             send_telegram_message(chat_id, f"❌ *Ошибка при создании события '{event['title']}':*\n`{e}`")
                 
-                # --- ФИНАЛЬНЫЙ ОТЧЕТ ---
                 final_report_text = f"✅ *Заметка «{notion_title}» создана!*\n_Категория: {notion_category}_"
                 if created_events_titles:
                     final_report_text += "\n\n📅 *Добавлено в календарь:*\n- " + "\n- ".join(created_events_titles)
-
                 if status_message_id:
                     edit_telegram_message(chat_id, status_message_id, final_report_text, add_undo_button=True)
-                # Если это было голосовое, отправляем отдельный отчет о календаре
                 elif created_events_titles:
-                    calendar_feedback = f"📅 *Добавлено {len(created_events_titles)} события в Календарь:*\n- " + "\n- ".join(created_events_titles)
-                    send_telegram_message(chat_id, calendar_feedback, add_undo_button=True)
-
+                    send_telegram_message(chat_id, f"📅 *Добавлено {len(created_events_titles)} события в Календарь:*\n- " + "\n- ".join(created_events_titles), add_undo_button=True)
         except Exception as e:
             if chat_id:
                 send_telegram_message(chat_id, f"🤯 *Произошла глобальная ошибка!*\nПожалуйста, проверьте логи Vercel.\n`{e}`")
