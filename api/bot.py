@@ -222,74 +222,72 @@ def summarize_for_search(context: str, question: str) -> str:
     response.raise_for_status()
     return response.json()['choices'][0]['message']['content']
 
-# --- КОНЕЦ БЛОКА ДЛЯ ВСТАВКИ ---
 
 def parse_to_notion_blocks(formatted_text: str) -> list:
-    """Превращает текст с Markdown-разметкой в нативные блоки Notion (параграфы, списки, жирный/курсив)."""
+    """Превращает текст в нативные блоки Notion, включая закладки, списки и параграфы с форматированием."""
     blocks = []
-    for line in formatted_text.split('\n'):
-        if not line.strip(): continue # Пропускаем пустые строки
+    
+    # 1. Сначала ищем все URL в тексте, чтобы сделать из них закладки
+    url_pattern = r'https?://\S+'
+    urls = re.findall(url_pattern, formatted_text)
+    
+    # Текст без URL-адресов
+    text_without_urls = re.sub(url_pattern, '', formatted_text)
 
-        # Определяем тип блока (список или параграф)
-        block_type = "bulleted_list_item" if line.strip().startswith('- ') else "paragraph"
-        # Убираем маркер списка для дальнейшей обработки
-        clean_line = line.strip().lstrip('- ')
+    # 2. Создаем блоки для остального текста (параграфы и списки)
+    for line in text_without_urls.split('\n'):
+        if not line.strip(): continue
+
+        is_bullet_item = line.strip().startswith('- ')
+        block_type = "bulleted_list_item" if is_bullet_item else "paragraph"
+        clean_line = line.strip().lstrip('- ') if is_bullet_item else line
         
-        # Создаем rich_text объекты с аннотациями для жирного и курсива
+        # Парсим inline-форматирование (жирный/курсив)
         rich_text_objects = []
-        # Используем re.split, чтобы разбить строку по ** или *
         parts = re.split(r'(\*\*.*?\*\*|\*.*?\*)', clean_line)
-        
-        for part in parts:
-            if not part: continue
-            
+        for part in filter(None, parts):
             is_bold = part.startswith('**') and part.endswith('**')
             is_italic = part.startswith('*') and part.endswith('*')
-            
-            content = part
-            annotations = {"bold": False, "italic": False}
+            content = part.strip('**').strip('*')
+            annotations = {"bold": is_bold, "italic": is_italic}
+            rich_text_objects.append({"type": "text", "text": {"content": content}, "annotations": annotations})
 
-            if is_bold:
-                content = part.strip('**')
-                annotations["bold"] = True
-            elif is_italic:
-                content = part.strip('*')
-                annotations["italic"] = True
+        if rich_text_objects:
+            if block_type == "bulleted_list_item":
+                blocks.append({"object": "block", "type": block_type, "bulleted_list_item": {"rich_text": rich_text_objects}})
+            else:
+                blocks.append({"object": "block", "type": block_type, "paragraph": {"rich_text": rich_text_objects}})
 
-            rich_text_objects.append({
-                "type": "text",
-                "text": {"content": content},
-                "annotations": annotations
-            })
-
-        # Собираем финальный блок
-        if block_type == "bulleted_list_item":
-            blocks.append({"object": "block", "type": block_type, "bulleted_list_item": {"rich_text": rich_text_objects}})
-        else:
-            blocks.append({"object": "block", "type": block_type, "paragraph": {"rich_text": rich_text_objects}})
-            
+    # 3. Добавляем блоки закладок для найденных URL
+    for url in urls:
+        blocks.append({
+            "object": "block",
+            "type": "bookmark",
+            "bookmark": {"url": url}
+        })
+        
     return blocks
     
 def process_with_deepseek(text: str) -> dict:
-    """Отправляет текст в DeepSeek, передавая корректное киевское время."""
+    """Отправляет текст в DeepSeek для умного форматирования и извлечения данных."""
     url = "https://api.deepseek.com/chat/completions"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
     
-    # --- ИСПРАВЛЕНИЕ: Получаем время с учетом часового пояса Киева (UTC+3) ---
-    kyiv_tz = timezone(timedelta(hours=3))
-    current_datetime_in_kyiv = datetime.now(kyiv_tz)
-    current_datetime_str = current_datetime_in_kyiv.strftime('%Y-%m-%d %H:%M:%S')
-    # --------------------------------------------------------------------
-
+    current_datetime_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
     prompt = f"""
-    Твоя роль: умный редактор заметок. Проанализируй заметку пользователя. Текущее время для расчетов: {current_datetime_str} (Часовой пояс Киев, EEST).
+    Твоя роль: умный редактор заметок. Проанализируй заметку пользователя. Текущее время для расчетов: {current_datetime_str}.
     Задачи:
     1. Язык: Сохраняй язык оригинала. Не переводи.
     2. Заголовок и Категория: Создай емкий заголовок и определи категорию из списка: [Идея, Задача, Покупка, Встреча, Мысль, Ссылка, Цитата].
-    3. Форматирование: Очень Красиво отформатируй текст, можешь оптимизировать если где-то явное пустословие. Заголовки - жирным, можно с эмодзи. Списки - через дефис с эмодзи. Комментарии, мысли - курсивом. Они должны быть прекрасными и эстетичными.
-    4. События: Найди ВСЕ события с датой/временем. Учитывай относительные даты ("завтра", "через 30 минут"). Конвертируй их в абсолютный формат YYYY-MM-DDTHH:MM:SS. Если событий нет - верни пустой список "events": [].
-    5. Если есть обращение к Deepseek (также дипсик, дип сик и тд.) то воспринимай тот отрезок текста как обращение к тебе, как поправка к промпту.
-    5. Результат: Верни строго JSON.
+    3. Форматирование: Очень Красиво отформатируй текст, можешь оптимизировать если где-то явное пустословие. Заметки должны быть прекрасными и эстетичными.
+        - Заголовки - жирным, можно с 1 эмодзи. 
+        - Списки - через дефис с эмодзи. 
+        - Комментарии - курсивом.
+        - ВАЖНО: Каждую ссылку (URL) всегда размещай на отдельной строке.
+    4. Если есть обращение к Deepseek (также дипсик, дип сик и тд.) то воспринимай тот отрезок текста как обращение к тебе, как поправка к промпту.
+    5. События: Найди ВСЕ события с датой/временем. Учитывай относительные даты ("завтра", "через 30 минут"). Если их нет - верни пустой список "events": [].
+    6. Результат: Верни строго JSON.
     Формат JSON: {{"main_title": "...", "category": "...", "formatted_body": "...", "events": [{{"title": "...", "datetime_iso": "..."}}]}}
     Заметка: --- {text} ---
     """
