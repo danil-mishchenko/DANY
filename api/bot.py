@@ -225,51 +225,57 @@ def summarize_for_search(context: str, question: str) -> str:
 
 def parse_to_notion_blocks(formatted_text: str) -> list:
     """
-    Превращает текст в нативные блоки Notion, корректно чередуя закладки, списки и параграфы.
+    Превращает текст в нативные блоки Notion, корректно находя URL в любой части строки
+    и используя остальной текст как подпись к закладке.
     """
     blocks = []
-    # Паттерн для определения, является ли строка URL-адресом
-    url_pattern = re.compile(r'^https?://\S+$')
+    # Паттерн для поиска URL в любом месте строки
+    url_pattern = re.compile(r'https?://\S+')
 
     for line in formatted_text.split('\n'):
         stripped_line = line.strip()
         if not stripped_line:
-            continue # Пропускаем пустые строки
-
-        # 1. Проверяем, является ли вся строка URL-адресом
-        if url_pattern.match(stripped_line):
-            blocks.append({
-                "object": "block",
-                "type": "bookmark",
-                "bookmark": {"url": stripped_line}
-            })
             continue
 
-        # 2. Если не URL, проверяем, является ли это элементом списка
+        # 1. Ищем URL в строке
+        match = url_pattern.search(stripped_line)
+        
+        if match:
+            # URL найден
+            url = match.group(0)
+            
+            # 2. Весь остальной текст на строке делаем подписью
+            # Удаляем URL и лишние символы-разделители
+            caption_text = url_pattern.sub('', stripped_line).strip(' -').strip()
+            
+            # 3. Создаем блок закладки с подписью
+            bookmark_block = {
+                "object": "block",
+                "type": "bookmark",
+                "bookmark": {"url": url}
+            }
+            # Добавляем подпись, только если она не пустая
+            if caption_text:
+                bookmark_block["bookmark"]["caption"] = [{"type": "text", "text": {"content": caption_text}}]
+
+            blocks.append(bookmark_block)
+            continue
+
+        # 4. Если URL в строке не найден, обрабатываем как обычный текст (список или параграф)
         is_bullet_item = stripped_line.startswith('- ')
         block_type = "bulleted_list_item" if is_bullet_item else "paragraph"
-        
-        # Убираем маркер списка для дальнейшей обработки
         clean_line = stripped_line.lstrip('- ') if is_bullet_item else stripped_line
         
-        # 3. Парсим inline-форматирование (жирный/курсив) внутри строки
+        # Парсим inline-форматирование (жирный/курсив)
         rich_text_objects = []
         parts = re.split(r'(\*\*.*?\*\*|\*.*?\*)', clean_line)
-        
-        for part in filter(None, parts): # filter(None, parts) убирает пустые строки из списка
+        for part in filter(None, parts):
             is_bold = part.startswith('**') and part.endswith('**')
             is_italic = part.startswith('*') and part.endswith('*')
-            
             content = part.strip('**').strip('*')
             annotations = {"bold": is_bold, "italic": is_italic}
+            rich_text_objects.append({"type": "text", "text": {"content": content}, "annotations": annotations})
 
-            rich_text_objects.append({
-                "type": "text",
-                "text": {"content": content},
-                "annotations": annotations
-            })
-
-        # 4. Собираем и добавляем финальный блок (список или параграф)
         if rich_text_objects:
             if block_type == "bulleted_list_item":
                 blocks.append({"object": "block", "type": block_type, "bulleted_list_item": {"rich_text": rich_text_objects}})
