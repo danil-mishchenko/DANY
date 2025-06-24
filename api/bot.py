@@ -4,11 +4,17 @@ import json
 import requests
 import time # Импортируем для создания паузы
 import io
+import openai
+from pinecone import Pinecone
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import re
+
+openai.api_key = os.getenv('OPENAI_API_KEY')
+pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
+pinecone_index = pc.Index(host=os.getenv('PINECONE_HOST'))
 
 def markdown_to_gcal_html(md_text: str) -> str:
     """Конвертирует простой Markdown в HTML для Google Календаря."""
@@ -315,27 +321,29 @@ def process_with_deepseek(text: str) -> dict:
 
 # ИСПРАВЛЕННАЯ ФУНКЦИЯ для создания настоящих rich-text страниц
 def create_notion_page(title: str, formatted_content: str, category: str):
-    """Создает новую страницу в Notion, дублируя контент в свойство 'Содержание' для поиска."""
+    """Создает страницу в Notion и отправляет ее контент на индексацию в Pinecone."""
     url = 'https://api.notion.com/v1/pages'
     headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
     page_icon = CATEGORY_EMOJI_MAP.get(category, "📄")
-    
-    # Обрезаем контент до 2000 символов, т.к. это лимит для одного rich_text поля в Notion
     searchable_content = formatted_content[:2000]
-
-    properties = {
-        'Name': {'title': [{'type': 'text', 'text': {'content': title}}]},
-        'Категория': {'select': {'name': category}},
-        # ДОБАВЛЯЕМ НОВОЕ ПОЛЕ: копируем сюда текст заметки для поиска
-        'Содержание': {'rich_text': [{'type': 'text', 'text': {'content': searchable_content}}]}
-    }
-    
+    properties = {'Name': {'title': [{'type': 'text', 'text': {'content': title}}]}, 'Категория': {'select': {'name': category}}, 'Содержание': {'rich_text': [{'type': 'text', 'text': {'content': searchable_content}}]}}
     children = parse_to_notion_blocks(formatted_content)
-    
     payload = {'parent': {'database_id': NOTION_DATABASE_ID}, 'icon': {'type': 'emoji', 'emoji': page_icon}, 'properties': properties, 'children': children}
+    
     response = requests.post(url, headers=headers, json=payload)
     response.raise_for_status()
-    return response.json()['id']
+    page_id = response.json()['id']
+    print(f"Страница {page_id} успешно создана в Notion.")
+
+    # НОВЫЙ ШАГ: отправляем контент на индексацию в Pinecone
+    try:
+        # Индексируем заголовок + содержимое для лучшего поиска
+        full_text_for_embedding = f"Заголовок: {title}\nСодержимое: {formatted_content}"
+        upsert_to_pinecone(page_id, full_text_for_embedding)
+    except Exception as e:
+        print(f"ОШИБКА ИНДЕКСАЦИИ В PINECONE: {e}")
+        
+    return page_id
 
 def create_google_calendar_event(title: str, description: str, start_time_iso: str):
     """Создает событие в Google Календаре, конвертируя описание в HTML."""
@@ -500,6 +508,39 @@ def add_to_notion_page(page_id: str, text_to_add: str):
     payload = {'children': new_blocks}
     requests.patch(url, headers=headers, json=payload).raise_for_status()
 
+def get_text_embedding(text: str):
+    """Превращает текст в вектор с помощью OpenAI."""
+    response = openai.embeddings.create(
+        input=text,
+        model="text-embedding-3-small" # Эффективная и недорогая модель
+    )
+    return response.data[0].embedding
+
+def upsert_to_pinecone(page_id: str, text_content: str):
+    """Создает вектор для текста и сохраняет его в Pinecone."""
+    if not text_content:
+        print(f"Нет контента для индексации страницы {page_id}")
+        return
+    
+    print(f"Создаю вектор для страницы {page_id}...")
+    vector = get_text_embedding(text_content)
+    pinecone_index.upsert(vectors=[(page_id, vector)])
+    print(f"Вектор для страницы {page_id} успешно сохранен в Pinecone.")
+
+def query_pinecone(query_text: str, top_k: int = 3):
+    """Ищет наиболее похожие векторы в Pinecone."""
+    print(f"Создаю вектор для поискового запроса: '{query_text}'")
+    query_vector = get_text_embedding(query_text)
+    results = pinecone_index.query(
+        vector=query_vector,
+        top_k=top_k,
+        include_values=False
+    )
+    # Возвращаем список ID найденных страниц
+    page_ids = [match['id'] for match in results['matches']]
+    print(f"Pinecone нашел ID: {page_ids}")
+    return page_ids
+
 
 class handler(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -567,7 +608,17 @@ class handler(BaseHTTPRequestHandler):
                     self.send_response(200); self.end_headers(); return
             
             text = message.get('text', '')
-            
+
+            if text == '/index_all':
+                send_telegram_message(chat_id, "Начинаю полную индексацию всех заметок. Это может занять время...")
+                all_notes = get_latest_notes(100) # Увеличьте лимит, если заметок больше
+                for note in all_notes:
+                    page_id = note['id']
+                    page_content = get_notion_page_content(page_id)
+                    upsert_to_pinecone(page_id, page_content)
+                send_telegram_message(chat_id, f"✅ Готово! Проиндексировано {len(all_notes)} заметок.")
+                self.send_response(200); self.end_headers(); return
+    
             # ПРОВЕРКА КОМАНД
             if text == '/notes':
                 send_telegram_message(chat_id, "🔎 Ищу 3 последние заметки...")
@@ -592,22 +643,35 @@ class handler(BaseHTTPRequestHandler):
                     send_telegram_message(chat_id, "Пожалуйста, укажите, что нужно найти после команды /search.")
                     self.send_response(200); self.end_headers(); return
                 
-                send_telegram_message(chat_id, f"🔎 Ищу заметки по запросу: *{query}*...")
-                search_results = search_notion_pages(query)
-                if not search_results:
+                send_telegram_message(chat_id, f"🧠 Ищу по смыслу: *{query}*...")
+                
+                # 1. Ищем ID релевантных страниц в Pinecone
+                found_ids = query_pinecone(query, top_k=3)
+                
+                if not found_ids:
                     send_telegram_message(chat_id, "😔 Ничего не найдено по вашему запросу.")
                     self.send_response(200); self.end_headers(); return
 
-                top_result_id = search_results[0]['id']
-                page_content = get_notion_page_content(top_result_id)
-                if not page_content:
-                    send_telegram_message(chat_id, "🤔 Нашел подходящую заметку, но она пуста.")
+                # 2. Собираем контент найденных страниц
+                context = ""
+                for page_id in found_ids:
+                    try:
+                        page_title = get_notion_page_content(page_id).split('\n', 1)[0] # предполагаем, что заголовок в первой строке
+                        page_content = get_notion_page_content(page_id)
+                        context += f"--- Текст из заметки '{page_title}' ---\n{page_content}\n\n"
+                    except Exception as e:
+                        print(f"Не удалось получить контент для страницы {page_id}: {e}")
+
+                if not context:
+                    send_telegram_message(chat_id, "🤔 Нашел подходящие заметки, но не смог прочитать их содержимое.")
                     self.send_response(200); self.end_headers(); return
 
-                answer = summarize_for_search(page_content, query)
-                page_title = search_results[0].get('properties', {}).get('Name', {}).get('title', [{}])[0].get('plain_text', 'Без названия')
-                final_response = f"💡 *Результат поиска по заметке «{page_title}»*:\n\n{answer}"
+                # 3. Отправляем контекст и вопрос в ИИ для генерации ответа
+                answer = summarize_for_search(context, query)
+                
+                final_response = f"💡 *Вот что я нашел по вашему запросу:*\n\n{answer}"
                 send_telegram_message(chat_id, final_response)
+                
                 self.send_response(200); self.end_headers(); return
                 
             elif text == '/undo':
