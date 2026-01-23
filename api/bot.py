@@ -12,6 +12,10 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import re
 
+# --- Константы для надежности ---
+DEFAULT_TIMEOUT = (5, 30)  # (connect_timeout, read_timeout) в секундах
+MAX_POLLING_ATTEMPTS = 60  # Максимум попыток опроса (2 минуты при 2 сек паузе)
+
 openai.api_key = os.getenv('OPENAI_API_KEY')
 pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
 pinecone_index = pc.Index(host=os.getenv('PINECONE_HOST'))
@@ -50,10 +54,15 @@ ASSEMBLYAI_API_KEY = os.getenv('ASSEMBLYAI_API_KEY')
 def download_telegram_file(file_id: str) -> io.BytesIO:
     """Загружает файл (голосовое сообщение) с серверов Telegram."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}"
-    response = requests.get(url)
-    file_path = response.json()['result']['file_path']
+    response = requests.get(url, timeout=DEFAULT_TIMEOUT)
+    response.raise_for_status()
+    data = response.json()
+    if 'result' not in data or 'file_path' not in data['result']:
+        raise ValueError(f"Не удалось получить путь к файлу: {data}")
+    file_path = data['result']['file_path']
     file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-    file_response = requests.get(file_url)
+    file_response = requests.get(file_url, timeout=DEFAULT_TIMEOUT)
+    file_response.raise_for_status()
     return io.BytesIO(file_response.content)
 
 def transcribe_with_assemblyai(audio_file_bytes) -> str:
@@ -64,8 +73,10 @@ def transcribe_with_assemblyai(audio_file_bytes) -> str:
     upload_response = requests.post(
         'https://api.assemblyai.com/v2/upload',
         headers=headers,
-        data=audio_file_bytes
+        data=audio_file_bytes,
+        timeout=DEFAULT_TIMEOUT
     )
+    upload_response.raise_for_status()
     audio_url = upload_response.json()['upload_url']
     print("Аудиофайл успешно загружен в AssemblyAI.")
 
@@ -74,17 +85,21 @@ def transcribe_with_assemblyai(audio_file_bytes) -> str:
     transcript_response = requests.post(
         "https://api.assemblyai.com/v2/transcript",
         json=transcript_request,
-        headers=headers
+        headers=headers,
+        timeout=DEFAULT_TIMEOUT
     )
+    transcript_response.raise_for_status()
     transcript_id = transcript_response.json()['id']
     print(f"Задача на транскрибацию создана с ID: {transcript_id}")
 
-    # 3. Ждем результата (опрашиваем статус каждые пару секунд)
-    while True:
+    # 3. Ждем результата с ограничением по времени
+    for attempt in range(MAX_POLLING_ATTEMPTS):
         polling_response = requests.get(
             f"https://api.assemblyai.com/v2/transcript/{transcript_id}",
-            headers=headers
+            headers=headers,
+            timeout=DEFAULT_TIMEOUT
         )
+        polling_response.raise_for_status()
         status = polling_response.json()['status']
         if status == 'completed':
             print("Транскрибация завершена.")
@@ -92,7 +107,11 @@ def transcribe_with_assemblyai(audio_file_bytes) -> str:
         elif status == 'error':
             print("Ошибка транскрибации в AssemblyAI.")
             return None
-        time.sleep(2) # Пауза перед следующей проверкой
+        time.sleep(2)  # Пауза перед следующей проверкой
+    
+    # Превышено время ожидания
+    print(f"Превышено время ожидания транскрибации после {MAX_POLLING_ATTEMPTS} попыток")
+    return None
 
 def send_telegram_message(chat_id: str, text: str, use_html: bool = False, add_undo_button: bool = False):
     """Отправляет текстовое сообщение пользователю, опционально с кнопкой "Отменить"."""
@@ -117,7 +136,7 @@ def send_telegram_message(chat_id: str, text: str, use_html: bool = False, add_u
         payload['reply_markup'] = json.dumps(keyboard)
 
     try:
-        requests.post(url, json=payload).raise_for_status()
+        requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT).raise_for_status()
     except Exception as e:
         print(f"Ошибка при отправке сообщения в Telegram: {e}")
 
@@ -126,7 +145,7 @@ def send_initial_status_message(chat_id: str, text: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown'}
     try:
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
         response.raise_for_status()
         # Возвращаем ID отправленного сообщения
         return response.json()['result']['message_id']
@@ -148,7 +167,7 @@ def edit_telegram_message(chat_id: str, message_id: int, new_text: str, use_html
         payload['reply_markup'] = json.dumps(keyboard)
     
     try:
-        requests.post(url, json=payload).raise_for_status()
+        requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT).raise_for_status()
     except Exception as e:
         print(f"Ошибка при редактировании сообщения: {e}")
 
@@ -160,7 +179,7 @@ def get_latest_notes(limit: int = 5):
         "page_size": limit
     }
     headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
-    response = requests.post(url, headers=headers, json=payload)
+    response = requests.post(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
     return response.json().get('results', [])
 
@@ -182,7 +201,7 @@ def search_notion_pages(query: str):
     }
     
     headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
-    response = requests.post(url, headers=headers, json=payload)
+    response = requests.post(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
     
     return response.json().get('results', [])
@@ -191,7 +210,7 @@ def get_notion_page_content(page_id: str) -> str:
     """Получает все текстовое содержимое со страницы Notion."""
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"
     headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Notion-Version': '2022-06-28'}
-    response = requests.get(url, headers=headers)
+    response = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
     blocks = response.json().get('results', [])
     
@@ -224,7 +243,7 @@ def summarize_for_search(context: str, question: str) -> str:
     Вопрос пользователя: "{question}"
     """
     data = {"model": "deepseek-chat", "messages": [{"role": "system", "content": "Ты — полезный ассистент, отвечающий на вопросы по тексту."}, {"role": "user", "content": prompt}]}
-    response = requests.post(url, headers=headers, json=data)
+    response = requests.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
     return response.json()['choices'][0]['message']['content']
 
@@ -315,9 +334,13 @@ def process_with_deepseek(text: str) -> dict:
     Заметка: --- {text} ---
     """
     data = {"model": "deepseek-chat", "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}}
-    response = requests.post(url, headers=headers, json=data)
+    response = requests.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
-    return json.loads(response.json()['choices'][0]['message']['content'])
+    ai_response = response.json()
+    # Валидация ответа AI
+    if not ai_response.get('choices') or not ai_response['choices'][0].get('message'):
+        raise ValueError("Невалидный ответ от DeepSeek API")
+    return json.loads(ai_response['choices'][0]['message']['content'])
 
 # ИСПРАВЛЕННАЯ ФУНКЦИЯ для создания настоящих rich-text страниц
 def create_notion_page(title: str, formatted_content: str, category: str):
@@ -330,7 +353,7 @@ def create_notion_page(title: str, formatted_content: str, category: str):
     children = parse_to_notion_blocks(formatted_content)
     payload = {'parent': {'database_id': NOTION_DATABASE_ID}, 'icon': {'type': 'emoji', 'emoji': page_icon}, 'properties': properties, 'children': children}
     
-    response = requests.post(url, headers=headers, json=payload)
+    response = requests.post(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
     page_id = response.json()['id']
     print(f"Страница {page_id} успешно создана в Notion.")
@@ -393,7 +416,7 @@ def get_and_delete_last_log():
         "sorts": [{"timestamp": "created_time", "direction": "descending"}],
         "page_size": 1
     }
-    response = requests.post(query_url, headers=headers, json=payload)
+    response = requests.post(query_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
     results = response.json().get('results', [])
 
     if not results:
@@ -443,7 +466,7 @@ def log_last_action(properties: dict = None, notion_page_id: str = None, gcal_ev
     payload = {'parent': {'database_id': log_db_id}, 'properties': properties}
     
     try:
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
         response.raise_for_status()
         print(f"Действие успешно залогировано: {properties.get('Name', {}).get('title', [{}])[0].get('text', {}).get('content')}")
     except Exception as e:
@@ -454,7 +477,7 @@ def delete_notion_page(page_id):
     url = f"https://api.notion.com/v1/pages/{page_id}"
     headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Notion-Version': '2022-06-28'}
     payload = {'archived': True}
-    requests.patch(url, headers=headers, json=payload)
+    requests.patch(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
     print(f"Страница Notion {page_id} удалена.")
 
         
@@ -481,7 +504,7 @@ def get_user_state(user_id: str):
     }
     query_url = f"https://api.notion.com/v1/databases/{log_db_id}/query"
     headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
-    response = requests.post(query_url, headers=headers, json=payload)
+    response = requests.post(query_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
     results = response.json().get('results', [])
 
     if not results: return None
@@ -656,8 +679,8 @@ class handler(BaseHTTPRequestHandler):
                 context = ""
                 for page_id in found_ids:
                     try:
-                        page_title = get_notion_page_content(page_id).split('\n', 1)[0] # предполагаем, что заголовок в первой строке
                         page_content = get_notion_page_content(page_id)
+                        page_title = page_content.split('\n', 1)[0] if page_content else "Без названия"
                         context += f"--- Текст из заметки '{page_title}' ---\n{page_content}\n\n"
                     except Exception as e:
                         print(f"Не удалось получить контент для страницы {page_id}: {e}")
