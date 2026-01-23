@@ -3,23 +3,49 @@
 import json
 import traceback
 import sys
+import os
 from http.server import BaseHTTPRequestHandler
 
-# Настраиваем примитивное логирование для отладки старта
-def log_startup_error(msg):
-    print(f"[STARTUP ERROR] {msg}", file=sys.stderr)
+# Debugging: Print sys.path to see where Vercel looks for modules
+print(f"[DEBUG] sys.path: {sys.path}", file=sys.stderr)
+print(f"[DEBUG] CWD: {os.getcwd()}", file=sys.stderr)
+try:
+    print(f"[DEBUG] Contents of api/: {os.listdir('api')}", file=sys.stderr)
+except Exception:
+    print("[DEBUG] Could not list api/ directory", file=sys.stderr)
 
 try:
     import requests
-    # --- Imports from utils ---
+    print("[DEBUG] 'requests' module imported successfully", file=sys.stderr)
+except ImportError as e:
+    print(f"[CRITICAL] Failed to import requests: {e}", file=sys.stderr)
+    raise
+
+# --- Imports from utils ---
+try:
     from utils.config import (
         validate_env_vars,
         TELEGRAM_TOKEN,
         ALLOWED_TELEGRAM_ID,
         DEFAULT_TIMEOUT
     )
+    print("[DEBUG] 'utils.config' imported successfully", file=sys.stderr)
+except ImportError as e:
+    print(f"[CRITICAL] Failed to import utils.config: {e}", file=sys.stderr)
+    # Попробуем альтернативный импорт, если Vercel запускает не из корня
+    try:
+        from api.utils.config import (
+            validate_env_vars,
+            TELEGRAM_TOKEN,
+            ALLOWED_TELEGRAM_ID,
+            DEFAULT_TIMEOUT
+        )
+        print("[DEBUG] 'api.utils.config' imported successfully", file=sys.stderr)
+    except ImportError:
+        raise e
 
-    # --- Imports from services ---
+# --- Imports from services ---
+try:
     from services.telegram import (
         download_telegram_file,
         send_telegram_message,
@@ -50,19 +76,17 @@ try:
         upsert_to_pinecone,
         query_pinecone
     )
+    print("[DEBUG] All services imported successfully", file=sys.stderr)
+except ImportError as e:
+    print(f"[CRITICAL] Failed to import services: {e}", file=sys.stderr)
+    raise
 
-    # Validate environment variables at startup
+# Validate environment variables at startup
+try:
     validate_env_vars()
     print("✅ Bot startup successful. All modules loaded and env vars validated.")
-
 except Exception as e:
-    log_startup_error(f"Failed to initialize bot: {e}")
-    traceback.print_exc()
-    # Мы не можем остановить выполнение, но можем попытаться продолжить, 
-    # чтобы handler мог вернуть 500 ошибку с деталями, если Vercel позволит.
-    # Но если импорты упали, handler может не определиться.
-    # Поэтому определим заглушку, если что-то пошло не так.
-    pass 
+    print(f"[STARTUP ERROR] Env validation failed: {e}", file=sys.stderr) 
 
 
 
