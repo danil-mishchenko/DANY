@@ -15,6 +15,21 @@ import re
 # --- Константы для надежности ---
 DEFAULT_TIMEOUT = (5, 30)  # (connect_timeout, read_timeout) в секундах
 MAX_POLLING_ATTEMPTS = 60  # Максимум попыток опроса (2 минуты при 2 сек паузе)
+USER_TIMEZONE = os.getenv('USER_TIMEZONE', 'Europe/Kyiv')  # Таймзона пользователя
+
+# --- Валидация переменных окружения ---
+REQUIRED_ENV_VARS = [
+    'TELEGRAM_TOKEN', 'NOTION_TOKEN', 'NOTION_DATABASE_ID',
+    'DEEPSEEK_API_KEY', 'OPENAI_API_KEY', 'PINECONE_API_KEY', 'PINECONE_HOST'
+]
+
+def validate_env_vars():
+    """Проверяет наличие обязательных переменных окружения."""
+    missing = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
+    if missing:
+        raise EnvironmentError(f"Missing required environment variables: {missing}")
+
+validate_env_vars()  # Проверка при импорте модуля
 
 openai.api_key = os.getenv('OPENAI_API_KEY')
 pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
@@ -382,8 +397,8 @@ def create_google_calendar_event(title: str, description: str, start_time_iso: s
     event = {
         'summary': title,
         'description': html_description, # <--- ИСПОЛЬЗУЕМ HTML
-        'start': {'dateTime': start_time.isoformat(), 'timeZone': 'Europe/Kyiv'},
-        'end': {'dateTime': end_time.isoformat(), 'timeZone': 'Europe/Kyiv'},
+        'start': {'dateTime': start_time.isoformat(), 'timeZone': USER_TIMEZONE},
+        'end': {'dateTime': end_time.isoformat(), 'timeZone': USER_TIMEZONE},
         'reminders': {'useDefault': False, 'overrides': [{'method': 'popup', 'minutes': 15}]}
     }
     created_event = service.events().insert(calendarId=GOOGLE_CALENDAR_ID, body=event).execute()
@@ -614,7 +629,8 @@ class handler(BaseHTTPRequestHandler):
             user_id = str(message['from']['id'])
             chat_id = message['chat']['id']
 
-            if user_id != ALLOWED_TELEGRAM_ID:
+            allowed_id = ALLOWED_TELEGRAM_ID.strip() if ALLOWED_TELEGRAM_ID else ""
+            if user_id != allowed_id:
                 self.send_response(200); self.end_headers(); return
             
             # ПРОВЕРКА СОСТОЯНИЯ: не ждем ли мы текст для добавления?
