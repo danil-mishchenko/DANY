@@ -1,51 +1,69 @@
 # -*- coding: utf-8 -*-
 """Telegram Bot Handler - Main entry point for Vercel serverless function."""
 import json
-import requests
+import traceback
+import sys
 from http.server import BaseHTTPRequestHandler
 
-# --- Imports from utils ---
-from utils.config import (
-    validate_env_vars,
-    TELEGRAM_TOKEN,
-    ALLOWED_TELEGRAM_ID,
-    DEFAULT_TIMEOUT
-)
+# Настраиваем примитивное логирование для отладки старта
+def log_startup_error(msg):
+    print(f"[STARTUP ERROR] {msg}", file=sys.stderr)
 
-# --- Imports from services ---
-from services.telegram import (
-    download_telegram_file,
-    send_telegram_message,
-    send_initial_status_message,
-    edit_telegram_message
-)
-from services.notion import (
-    get_latest_notes,
-    get_notion_page_content,
-    create_notion_page,
-    delete_notion_page,
-    add_to_notion_page,
-    get_and_delete_last_log,
-    log_last_action,
-    set_user_state,
-    get_user_state
-)
-from services.calendar import (
-    create_google_calendar_event,
-    delete_gcal_event
-)
-from services.ai import (
-    transcribe_with_assemblyai,
-    process_with_deepseek,
-    summarize_for_search
-)
-from services.pinecone_svc import (
-    upsert_to_pinecone,
-    query_pinecone
-)
+try:
+    import requests
+    # --- Imports from utils ---
+    from utils.config import (
+        validate_env_vars,
+        TELEGRAM_TOKEN,
+        ALLOWED_TELEGRAM_ID,
+        DEFAULT_TIMEOUT
+    )
 
-# Validate environment variables at startup
-validate_env_vars()
+    # --- Imports from services ---
+    from services.telegram import (
+        download_telegram_file,
+        send_telegram_message,
+        send_initial_status_message,
+        edit_telegram_message
+    )
+    from services.notion import (
+        get_latest_notes,
+        get_notion_page_content,
+        create_notion_page,
+        delete_notion_page,
+        add_to_notion_page,
+        get_and_delete_last_log,
+        log_last_action,
+        set_user_state,
+        get_user_state
+    )
+    from services.calendar import (
+        create_google_calendar_event,
+        delete_gcal_event
+    )
+    from services.ai import (
+        transcribe_with_assemblyai,
+        process_with_deepseek,
+        summarize_for_search
+    )
+    from services.pinecone_svc import (
+        upsert_to_pinecone,
+        query_pinecone
+    )
+
+    # Validate environment variables at startup
+    validate_env_vars()
+    print("✅ Bot startup successful. All modules loaded and env vars validated.")
+
+except Exception as e:
+    log_startup_error(f"Failed to initialize bot: {e}")
+    traceback.print_exc()
+    # Мы не можем остановить выполнение, но можем попытаться продолжить, 
+    # чтобы handler мог вернуть 500 ошибку с деталями, если Vercel позволит.
+    # Но если импорты упали, handler может не определиться.
+    # Поэтому определим заглушку, если что-то пошло не так.
+    pass 
+
 
 
 class handler(BaseHTTPRequestHandler):
