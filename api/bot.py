@@ -6,46 +6,25 @@ import sys
 import os
 from http.server import BaseHTTPRequestHandler
 
-# Debugging: Print sys.path to see where Vercel looks for modules
-print(f"[DEBUG] sys.path: {sys.path}", file=sys.stderr)
-print(f"[DEBUG] CWD: {os.getcwd()}", file=sys.stderr)
-try:
-    print(f"[DEBUG] Contents of api/: {os.listdir('api')}", file=sys.stderr)
-except Exception:
-    print("[DEBUG] Could not list api/ directory", file=sys.stderr)
+# --- VERCEL PATH FIX ---
+# Добавляем папку 'api' в sys.path, чтобы imports работали правильно
+# Vercel запускает из корня (/var/task), а модули лежат в /var/task/api
+current_dir = os.getcwd()
+api_dir = os.path.join(current_dir, 'api')
+if api_dir not in sys.path:
+    sys.path.append(api_dir)
 
+# --- Imports (Global Scope) ---
 try:
     import requests
-    print("[DEBUG] 'requests' module imported successfully", file=sys.stderr)
-except ImportError as e:
-    print(f"[CRITICAL] Failed to import requests: {e}", file=sys.stderr)
-    raise
-
-# --- Imports from utils ---
-try:
+    # --- Utils ---
     from utils.config import (
         validate_env_vars,
         TELEGRAM_TOKEN,
         ALLOWED_TELEGRAM_ID,
         DEFAULT_TIMEOUT
     )
-    print("[DEBUG] 'utils.config' imported successfully", file=sys.stderr)
-except ImportError as e:
-    print(f"[CRITICAL] Failed to import utils.config: {e}", file=sys.stderr)
-    # Попробуем альтернативный импорт, если Vercel запускает не из корня
-    try:
-        from api.utils.config import (
-            validate_env_vars,
-            TELEGRAM_TOKEN,
-            ALLOWED_TELEGRAM_ID,
-            DEFAULT_TIMEOUT
-        )
-        print("[DEBUG] 'api.utils.config' imported successfully", file=sys.stderr)
-    except ImportError:
-        raise e
-
-# --- Imports from services ---
-try:
+    # --- Services ---
     from services.telegram import (
         download_telegram_file,
         send_telegram_message,
@@ -76,17 +55,15 @@ try:
         upsert_to_pinecone,
         query_pinecone
     )
-    print("[DEBUG] All services imported successfully", file=sys.stderr)
-except ImportError as e:
-    print(f"[CRITICAL] Failed to import services: {e}", file=sys.stderr)
-    raise
 
-# Validate environment variables at startup
-try:
+    # Validate environment variables at startup
     validate_env_vars()
-    print("✅ Bot startup successful. All modules loaded and env vars validated.")
+
 except Exception as e:
-    print(f"[STARTUP ERROR] Env validation failed: {e}", file=sys.stderr) 
+    # Критическая ошибка старта - выводим в лог Vercel
+    print(f"[CRITICAL STARTUP ERROR] {e}", file=sys.stderr)
+    traceback.print_exc()
+ 
 
 
 
