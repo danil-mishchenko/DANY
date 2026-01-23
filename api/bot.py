@@ -46,7 +46,7 @@ NOTION_DATABASE_ID = os.getenv('NOTION_DATABASE_ID')
 NOTION_LOG_DB_ID = os.getenv('NOTION_LOG_DB_ID')
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 GOOGLE_CREDENTIALS_JSON = os.getenv('GOOGLE_CREDENTIALS_JSON')
-GOOGLE_CALENDAR_ID = os.getenv('GOOGLE_CALENDAR_ID') # <--- ВОТ ЭТА СТРОКА ПРОПАЛА
+GOOGLE_CALENDAR_ID = os.getenv('GOOGLE_CALENDAR_ID')
 ALLOWED_TELEGRAM_ID = os.getenv('ALLOWED_TELEGRAM_ID')
 ASSEMBLYAI_API_KEY = os.getenv('ASSEMBLYAI_API_KEY')
 
@@ -529,7 +529,7 @@ def add_to_notion_page(page_id: str, text_to_add: str):
     headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
     new_blocks = parse_to_notion_blocks(text_to_add)
     payload = {'children': new_blocks}
-    requests.patch(url, headers=headers, json=payload).raise_for_status()
+    requests.patch(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT).raise_for_status()
 
 def get_text_embedding(text: str):
     """Превращает текст в вектор с помощью OpenAI."""
@@ -581,7 +581,7 @@ class handler(BaseHTTPRequestHandler):
                 callback_data = callback_query['data']
                 chat_id = callback_query['message']['chat']['id']
                 callback_query_id = callback_query['id']
-                requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery?callback_query_id={callback_query_id}")
+                requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery?callback_query_id={callback_query_id}", timeout=DEFAULT_TIMEOUT)
 
                 if callback_data == 'undo_last_action':
                     last_action = get_and_delete_last_log()
@@ -657,7 +657,7 @@ class handler(BaseHTTPRequestHandler):
                         keyboard = {"inline_keyboard": [[ {"text": "➕ Добавить", "callback_data": f"add_to_notion_{page_id}"}, {"text": "🗑️ Удалить", "callback_data": f"delete_notion_{page_id}"} ]]}
                         message_text = f"*{page_title}*"
                         payload = {'chat_id': chat_id, 'text': message_text, 'parse_mode': 'Markdown', 'reply_markup': json.dumps(keyboard)}
-                        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json=payload)
+                        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json=payload, timeout=DEFAULT_TIMEOUT)
                 self.send_response(200); self.end_headers(); return
 
             elif text.startswith('/search '):
