@@ -302,7 +302,19 @@ class handler(BaseHTTPRequestHandler):
                 return
     
             # ПРОВЕРКА КОМАНД
-            if text == '/notes':
+            if text == '/start':
+                send_telegram_message(
+                    chat_id, 
+                    "👋 *Привет!* Я твой бот для заметок.\n\n"
+                    "📝 Просто напиши или запиши голосовое — я создам заметку в Notion.\n\n"
+                    "Используй кнопки ниже для навигации:",
+                    show_keyboard=True
+                )
+                self.send_response(200)
+                self.end_headers()
+                return
+            
+            elif text == '/notes':
                 send_telegram_message(chat_id, "🔎 Ищу 3 последние заметки...")
                 latest_notes = get_latest_notes(3)
                 if not latest_notes:
@@ -535,7 +547,7 @@ class handler(BaseHTTPRequestHandler):
                 
                 if status_message_id:
                     # Редактируем существующее сообщение с прогресс-баром
-                    edit_telegram_message(chat_id, status_message_id, final_report_text, add_undo_button=True)
+                    edit_telegram_message(chat_id, status_message_id, final_report_text, inline_buttons=action_buttons)
                 else:
                     # Отправляем новое сообщение с кнопками
                     send_message_with_buttons(chat_id, final_report_text, action_buttons)

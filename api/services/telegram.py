@@ -106,8 +106,17 @@ def send_initial_status_message(chat_id: str, text: str):
         return None
 
 
-def edit_telegram_message(chat_id: str, message_id: int, new_text: str, use_html: bool = False, add_undo_button: bool = False):
-    """Редактирует существующее сообщение в Telegram."""
+def edit_telegram_message(chat_id: str, message_id: int, new_text: str, use_html: bool = False, add_undo_button: bool = False, inline_buttons: list = None):
+    """Редактирует существующее сообщение в Telegram.
+    
+    Args:
+        chat_id: ID чата
+        message_id: ID сообщения для редактирования
+        new_text: Новый текст сообщения
+        use_html: Использовать HTML вместо Markdown
+        add_undo_button: Добавить только кнопку "Отменить" (устаревший параметр)
+        inline_buttons: Список рядов inline-кнопок (приоритетнее add_undo_button)
+    """
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText"
     payload = {
         'chat_id': chat_id,
@@ -115,7 +124,10 @@ def edit_telegram_message(chat_id: str, message_id: int, new_text: str, use_html
         'text': new_text,
         'parse_mode': 'HTML' if use_html else 'Markdown'
     }
-    if add_undo_button:
+    
+    if inline_buttons:
+        payload['reply_markup'] = json.dumps({"inline_keyboard": inline_buttons})
+    elif add_undo_button:
         keyboard = {"inline_keyboard": [[{"text": "↩️ Отменить", "callback_data": "undo_last_action"}]]}
         payload['reply_markup'] = json.dumps(keyboard)
     
