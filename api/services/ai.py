@@ -112,3 +112,46 @@ def summarize_for_search(context: str, question: str) -> str:
     response = requests.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
     return response.json()['choices'][0]['message']['content']
+
+
+def polish_content(old_content: str, new_content: str) -> str:
+    """Объединяет и полирует контент через AI.
+    
+    Лёгкая полировка: исправление опечаток, улучшение форматирования,
+    объединение в единый текст без изменения смысла.
+    """
+    url = "https://api.deepseek.com/chat/completions"
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
+    
+    prompt = f"""
+    Объедини два текста в один красивый и логичный. Выполни ЛЁГКУЮ полировку:
+    - Исправь опечатки
+    - Улучши форматирование (списки, заголовки с эмодзи)
+    - Убери повторы и пустословие
+    - НЕ меняй смысл и НЕ добавляй новую информацию
+    - Сохраняй язык оригинала
+    
+    Существующий текст:
+    ---
+    {old_content}
+    ---
+    
+    Новый текст для добавления:
+    ---
+    {new_content}
+    ---
+    
+    Верни ТОЛЬКО отполированный текст, без комментариев.
+    """
+    
+    data = {
+        "model": "deepseek-chat", 
+        "messages": [
+            {"role": "system", "content": "Ты — редактор заметок. Полируешь текст, сохраняя смысл."},
+            {"role": "user", "content": prompt}
+        ]
+    }
+    
+    response = requests.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT)
+    response.raise_for_status()
+    return response.json()['choices'][0]['message']['content']

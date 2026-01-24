@@ -7,6 +7,18 @@ import requests
 from utils.config import TELEGRAM_TOKEN, DEFAULT_TIMEOUT
 
 
+def get_persistent_keyboard():
+    """Возвращает структуру постоянной клавиатуры под полем ввода."""
+    return {
+        "keyboard": [
+            [{"text": "📝 Заметки"}, {"text": "🔍 Поиск"}],
+            [{"text": "✏️ Изменить"}, {"text": "↩️ Отмена"}]
+        ],
+        "resize_keyboard": True,
+        "is_persistent": True
+    }
+
+
 def download_telegram_file(file_id: str) -> io.BytesIO:
     """Загружает файл (голосовое сообщение) с серверов Telegram."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}"
@@ -22,8 +34,16 @@ def download_telegram_file(file_id: str) -> io.BytesIO:
     return io.BytesIO(file_response.content)
 
 
-def send_telegram_message(chat_id: str, text: str, use_html: bool = False, add_undo_button: bool = False):
-    """Отправляет текстовое сообщение пользователю, опционально с кнопкой 'Отменить'."""
+def send_telegram_message(chat_id: str, text: str, use_html: bool = False, add_undo_button: bool = False, show_keyboard: bool = False):
+    """Отправляет текстовое сообщение пользователю.
+    
+    Args:
+        chat_id: ID чата
+        text: Текст сообщения
+        use_html: Использовать HTML вместо Markdown
+        add_undo_button: Добавить inline-кнопку "Отменить"
+        show_keyboard: Показать постоянную клавиатуру
+    """
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     
     payload = {
@@ -39,11 +59,38 @@ def send_telegram_message(chat_id: str, text: str, use_html: bool = False, add_u
             ]]
         }
         payload['reply_markup'] = json.dumps(keyboard)
+    elif show_keyboard:
+        payload['reply_markup'] = json.dumps(get_persistent_keyboard())
 
     try:
         requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT).raise_for_status()
     except Exception as e:
         print(f"Ошибка при отправке сообщения в Telegram: {e}")
+
+
+def send_message_with_buttons(chat_id: str, text: str, inline_buttons: list, use_html: bool = False):
+    """Отправляет сообщение с inline-кнопками.
+    
+    Args:
+        chat_id: ID чата
+        text: Текст сообщения
+        inline_buttons: Список рядов кнопок, например:
+            [[{"text": "Кнопка 1", "callback_data": "action1"}]]
+        use_html: Использовать HTML вместо Markdown
+    """
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    
+    payload = {
+        'chat_id': chat_id,
+        'text': text,
+        'parse_mode': 'HTML' if use_html else 'Markdown',
+        'reply_markup': json.dumps({"inline_keyboard": inline_buttons})
+    }
+
+    try:
+        requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT).raise_for_status()
+    except Exception as e:
+        print(f"Ошибка при отправке сообщения с кнопками: {e}")
 
 
 def send_initial_status_message(chat_id: str, text: str):
@@ -76,3 +123,16 @@ def edit_telegram_message(chat_id: str, message_id: int, new_text: str, use_html
         requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT).raise_for_status()
     except Exception as e:
         print(f"Ошибка при редактировании сообщения: {e}")
+
+
+def answer_callback_query(callback_query_id: str, text: str = None):
+    """Отвечает на callback query (убирает 'часики' на кнопке)."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery"
+    payload = {'callback_query_id': callback_query_id}
+    if text:
+        payload['text'] = text
+    try:
+        requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
+    except Exception as e:
+        print(f"Ошибка при ответе на callback: {e}")
+

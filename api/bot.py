@@ -29,7 +29,9 @@ try:
         download_telegram_file,
         send_telegram_message,
         send_initial_status_message,
-        edit_telegram_message
+        edit_telegram_message,
+        send_message_with_buttons,
+        answer_callback_query
     )
     from services.notion import (
         get_latest_notes,
@@ -42,7 +44,10 @@ try:
         set_user_state,
         get_user_state,
         get_last_created_page_id,
-        get_page_title
+        get_page_title,
+        get_page_preview,
+        replace_page_content,
+        rename_page
     )
     from services.calendar import (
         create_google_calendar_event,
@@ -51,7 +56,8 @@ try:
     from services.ai import (
         transcribe_with_assemblyai,
         process_with_deepseek,
-        summarize_for_search
+        summarize_for_search,
+        polish_content
     )
     from services.pinecone_svc import (
         upsert_to_pinecone,
@@ -85,10 +91,7 @@ class handler(BaseHTTPRequestHandler):
                 callback_data = callback_query['data']
                 chat_id = callback_query['message']['chat']['id']
                 callback_query_id = callback_query['id']
-                requests.get(
-                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery?callback_query_id={callback_query_id}", 
-                    timeout=DEFAULT_TIMEOUT
-                )
+                answer_callback_query(callback_query_id)
 
                 if callback_data == 'undo_last_action':
                     last_action = get_and_delete_last_log()
@@ -114,6 +117,58 @@ class handler(BaseHTTPRequestHandler):
                     set_user_state(str(chat_id), 'awaiting_add_text', page_id)
                     send_telegram_message(chat_id, "▶️ Введите текст, который нужно *добавить* в конец заметки:")
                 
+                elif callback_data.startswith('rename_page_'):
+                    page_id = callback_data.replace('rename_page_', '')
+                    set_user_state(str(chat_id), 'awaiting_rename', page_id)
+                    send_telegram_message(chat_id, "✏️ Введите новое название заметки:")
+                
+                elif callback_data.startswith('view_page_'):
+                    page_id = callback_data.replace('view_page_', '')
+                    try:
+                        title = get_page_title(page_id)
+                        content = get_notion_page_content(page_id)
+                        # Ограничиваем длину для Telegram (4096 символов)
+                        if len(content) > 3500:
+                            content = content[:3500] + "\n\n... _(текст обрезан)_"
+                        send_telegram_message(chat_id, f"📋 *{title}*\n\n{content}")
+                    except Exception as e:
+                        send_telegram_message(chat_id, f"❌ Ошибка при загрузке: {e}")
+                
+                elif callback_data.startswith('edit_simple_'):
+                    # Просто добавить текст без полировки
+                    page_id = callback_data.replace('edit_simple_', '')
+                    user_state = get_user_state(str(chat_id))
+                    if user_state and user_state.get('pending_edit_text'):
+                        text_to_add = user_state['pending_edit_text']
+                        try:
+                            add_to_notion_page(page_id, text_to_add)
+                            title = get_page_title(page_id)
+                            send_telegram_message(chat_id, f"✅ Добавлено в *{title}*", show_keyboard=True)
+                        except Exception as e:
+                            send_telegram_message(chat_id, f"❌ Ошибка: {e}")
+                        set_user_state(str(chat_id), None, None)  # Очищаем state
+                    else:
+                        send_telegram_message(chat_id, "❌ Текст для добавления не найден.")
+                
+                elif callback_data.startswith('edit_polish_'):
+                    # Добавить + полировка через AI
+                    page_id = callback_data.replace('edit_polish_', '')
+                    user_state = get_user_state(str(chat_id))
+                    if user_state and user_state.get('pending_edit_text'):
+                        new_text = user_state['pending_edit_text']
+                        try:
+                            send_telegram_message(chat_id, "✨ Полирую текст...")
+                            old_content = get_notion_page_content(page_id)
+                            polished = polish_content(old_content, new_text)
+                            replace_page_content(page_id, polished)
+                            title = get_page_title(page_id)
+                            send_telegram_message(chat_id, f"✅ *{title}* обновлена и отполирована!", show_keyboard=True)
+                        except Exception as e:
+                            send_telegram_message(chat_id, f"❌ Ошибка полировки: {e}")
+                        set_user_state(str(chat_id), None, None)
+                    else:
+                        send_telegram_message(chat_id, "❌ Текст для добавления не найден.")
+                
                 self.send_response(200)
                 self.end_headers()
                 return
@@ -133,22 +188,106 @@ class handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             
-            # ПРОВЕРКА СОСТОЯНИЯ: не ждем ли мы текст для добавления?
+            # ПРОВЕРКА СОСТОЯНИЯ: не ждем ли мы текст для добавления/переименования/поиска?
             user_state = get_user_state(user_id)
             if user_state:
-                if user_state.get('state') == 'awaiting_add_text':
+                state_type = user_state.get('state')
+                
+                if state_type == 'awaiting_add_text':
                     page_id_to_edit = user_state['page_id']
                     text_to_add = message.get('text', '')
                     if text_to_add:
                         add_to_notion_page(page_id_to_edit, text_to_add)
-                        send_telegram_message(chat_id, "✅ Текст успешно добавлен в заметку!")
+                        send_telegram_message(chat_id, "✅ Текст успешно добавлен в заметку!", show_keyboard=True)
                     else:
                         send_telegram_message(chat_id, "Отмена. Получено пустое сообщение.")
+                    set_user_state(user_id, None, None)  # Очищаем state
+                    self.send_response(200)
+                    self.end_headers()
+                    return
+                
+                elif state_type == 'awaiting_rename':
+                    page_id = user_state['page_id']
+                    new_title = message.get('text', '').strip()
+                    if new_title:
+                        try:
+                            rename_page(page_id, new_title)
+                            send_telegram_message(chat_id, f"✅ Заметка переименована в *{new_title}*", show_keyboard=True)
+                        except Exception as e:
+                            send_telegram_message(chat_id, f"❌ Ошибка переименования: {e}")
+                    else:
+                        send_telegram_message(chat_id, "Отмена. Название не может быть пустым.")
+                    set_user_state(user_id, None, None)
+                    self.send_response(200)
+                    self.end_headers()
+                    return
+                
+                elif state_type == 'awaiting_search':
+                    query = message.get('text', '').strip()
+                    if query:
+                        # Переиспользуем логику поиска
+                        send_telegram_message(chat_id, f"🧠 Ищу по смыслу: *{query}*...")
+                        found_ids = query_pinecone(query, top_k=3)
+                        
+                        if not found_ids:
+                            send_telegram_message(chat_id, "😔 Ничего не найдено.", show_keyboard=True)
+                        else:
+                            context = ""
+                            for page_id in found_ids:
+                                try:
+                                    page_content = get_notion_page_content(page_id)
+                                    page_title = page_content.split('\n', 1)[0] if page_content else "Без названия"
+                                    context += f"--- Текст из заметки '{page_title}' ---\n{page_content}\n\n"
+                                except Exception as e:
+                                    print(f"Не удалось получить контент для страницы {page_id}: {e}")
+                            
+                            if context:
+                                answer = summarize_for_search(context, query)
+                                send_telegram_message(chat_id, f"💡 *Вот что я нашел:*\n\n{answer}", show_keyboard=True)
+                            else:
+                                send_telegram_message(chat_id, "🤔 Нашел заметки, но не смог прочитать.", show_keyboard=True)
+                    else:
+                        send_telegram_message(chat_id, "Отмена. Пустой запрос.")
+                    set_user_state(user_id, None, None)
                     self.send_response(200)
                     self.end_headers()
                     return
             
             text = message.get('text', '')
+            
+            # ОБРАБОТКА КНОПОК КЛАВИАТУРЫ
+            if text == "📝 Заметки":
+                text = "/notes"  # Перенаправляем на существующую логику
+            elif text == "🔍 Поиск":
+                set_user_state(user_id, 'awaiting_search', None)
+                send_telegram_message(chat_id, "🔍 Введите поисковый запрос:")
+                self.send_response(200)
+                self.end_headers()
+                return
+            elif text == "✏️ Изменить":
+                # Показываем последнюю заметку с кнопками
+                last_page_id = get_last_created_page_id()
+                if last_page_id:
+                    preview = get_page_preview(last_page_id)
+                    buttons = [
+                        [
+                            {"text": "✏️ Переименовать", "callback_data": f"rename_page_{last_page_id}"},
+                            {"text": "👁️ Просмотр", "callback_data": f"view_page_{last_page_id}"}
+                        ],
+                        [
+                            {"text": "➕ Добавить текст", "callback_data": f"add_to_notion_{last_page_id}"},
+                            {"text": "🗑️ Удалить", "callback_data": f"delete_notion_{last_page_id}"}
+                        ]
+                    ]
+                    msg = f"📋 *{preview['title']}*\n\n_{preview['preview']}_"
+                    send_message_with_buttons(chat_id, msg, buttons)
+                else:
+                    send_telegram_message(chat_id, "❌ Нет заметок для редактирования.", show_keyboard=True)
+                self.send_response(200)
+                self.end_headers()
+                return
+            elif text == "↩️ Отмена":
+                text = "/undo"
 
             if text == '/index_all':
                 send_telegram_message(chat_id, "Начинаю полную индексацию всех заметок. Это может занять время...")
@@ -157,7 +296,7 @@ class handler(BaseHTTPRequestHandler):
                     page_id = note['id']
                     page_content = get_notion_page_content(page_id)
                     upsert_to_pinecone(page_id, page_content)
-                send_telegram_message(chat_id, f"✅ Готово! Проиндексировано {len(all_notes)} заметок.")
+                send_telegram_message(chat_id, f"✅ Готово! Проиндексировано {len(all_notes)} заметок.", show_keyboard=True)
                 self.send_response(200)
                 self.end_headers()
                 return
@@ -250,14 +389,24 @@ class handler(BaseHTTPRequestHandler):
                 edit_text = text[5:].strip()  # Убираем '/edit' и пробелы
                 
                 if not edit_text:
-                    # Если текст не указан, показываем справку
-                    send_telegram_message(
-                        chat_id, 
-                        "📝 *Редактирование заметок*\n\n"
-                        "Используйте: `/edit <текст>`\n\n"
-                        "Пример: `/edit И ещё купить хлеб`\n\n"
-                        "Текст будет добавлен в конец последней созданной заметки."
-                    )
+                    # Если текст не указан, показываем последнюю заметку с кнопками
+                    last_page_id = get_last_created_page_id()
+                    if last_page_id:
+                        preview = get_page_preview(last_page_id)
+                        buttons = [
+                            [
+                                {"text": "✏️ Переименовать", "callback_data": f"rename_page_{last_page_id}"},
+                                {"text": "👁️ Просмотр", "callback_data": f"view_page_{last_page_id}"}
+                            ],
+                            [
+                                {"text": "➕ Добавить текст", "callback_data": f"add_to_notion_{last_page_id}"},
+                                {"text": "🗑️ Удалить", "callback_data": f"delete_notion_{last_page_id}"}
+                            ]
+                        ]
+                        msg = f"📝 *Последняя заметка:*\n\n*{preview['title']}*\n_{preview['preview']}_"
+                        send_message_with_buttons(chat_id, msg, buttons)
+                    else:
+                        send_telegram_message(chat_id, "❌ Нет заметок для редактирования.", show_keyboard=True)
                     self.send_response(200)
                     self.end_headers()
                     return
@@ -275,23 +424,17 @@ class handler(BaseHTTPRequestHandler):
                     self.end_headers()
                     return
                 
-                try:
-                    # Получаем название заметки для подтверждения
-                    page_title = get_page_title(last_page_id)
-                    
-                    # Добавляем текст в заметку
-                    add_to_notion_page(last_page_id, edit_text)
-                    
-                    send_telegram_message(
-                        chat_id, 
-                        f"✅ Добавлено в *{page_title}*:\n\n_{edit_text}_"
-                    )
-                except Exception as e:
-                    print(f"Ошибка при редактировании заметки: {e}")
-                    send_telegram_message(
-                        chat_id, 
-                        f"❌ Ошибка при добавлении текста: {e}"
-                    )
+                # Сохраняем текст в user state и показываем кнопки выбора
+                page_title = get_page_title(last_page_id)
+                set_user_state(user_id, 'pending_edit', last_page_id, edit_text)
+                
+                buttons = [[
+                    {"text": "➕ Просто добавить", "callback_data": f"edit_simple_{last_page_id}"},
+                    {"text": "✨ Добавить + Полировка", "callback_data": f"edit_polish_{last_page_id}"}
+                ]]
+                
+                msg = f"📝 Добавить в *{page_title}*:\n\n_{edit_text}_"
+                send_message_with_buttons(chat_id, msg, buttons)
                 
                 self.send_response(200)
                 self.end_headers()
@@ -372,17 +515,30 @@ class handler(BaseHTTPRequestHandler):
                         except Exception as e:
                             send_telegram_message(chat_id, f"❌ *Ошибка при создании события '{event['title']}':*\n`{e}`")
                 
-                final_report_text = f"✅ *Заметка «{notion_title}» создана!*\n_Категория: {notion_category}_"
+                final_report_text = f"✅ *Заметка создана!*\n\n📋 *{notion_title}*\n_{formatted_body[:100]}..._" if len(formatted_body) > 100 else f"✅ *Заметка создана!*\n\n📋 *{notion_title}*\n_{formatted_body}_"
+                final_report_text += f"\n\n_Категория: {notion_category}_"
+                
                 if created_events_titles:
                     final_report_text += "\n\n📅 *Добавлено в календарь:*\n- " + "\n- ".join(created_events_titles)
+                
+                # Создаём inline кнопки для действий
+                action_buttons = [
+                    [
+                        {"text": "✏️ Переименовать", "callback_data": f"rename_page_{notion_page_id}"},
+                        {"text": "👁️ Просмотр", "callback_data": f"view_page_{notion_page_id}"}
+                    ],
+                    [
+                        {"text": "➕ Добавить", "callback_data": f"add_to_notion_{notion_page_id}"},
+                        {"text": "↩️ Отменить", "callback_data": "undo_last_action"}
+                    ]
+                ]
+                
                 if status_message_id:
+                    # Редактируем существующее сообщение с прогресс-баром
                     edit_telegram_message(chat_id, status_message_id, final_report_text, add_undo_button=True)
-                elif created_events_titles:
-                    send_telegram_message(
-                        chat_id, 
-                        f"📅 *Добавлено {len(created_events_titles)} события в Календарь:*\n- " + "\n- ".join(created_events_titles), 
-                        add_undo_button=True
-                    )
+                else:
+                    # Отправляем новое сообщение с кнопками
+                    send_message_with_buttons(chat_id, final_report_text, action_buttons)
         except Exception as e:
             if chat_id:
                 send_telegram_message(chat_id, f"🤯 *Произошла глобальная ошибка!*\nПожалуйста, проверьте логи Vercel.\n`{e}`")

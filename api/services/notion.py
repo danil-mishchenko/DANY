@@ -174,6 +174,76 @@ def get_page_title(page_id: str) -> str:
     return "Без названия"
 
 
+def get_page_preview(page_id: str, max_chars: int = 100) -> dict:
+    """Получает превью страницы: заголовок + первые N символов контента.
+    
+    Returns:
+        dict с ключами: title, preview, page_id
+    """
+    title = get_page_title(page_id)
+    content = get_notion_page_content(page_id)
+    
+    if len(content) > max_chars:
+        preview = content[:max_chars].strip() + "..."
+    else:
+        preview = content
+    
+    return {
+        'title': title,
+        'preview': preview,
+        'page_id': page_id
+    }
+
+
+def get_page_blocks(page_id: str) -> list:
+    """Получает все блоки страницы Notion (для удаления/замены)."""
+    url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Notion-Version': '2022-06-28'}
+    
+    response = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
+    response.raise_for_status()
+    return response.json().get('results', [])
+
+
+def delete_block(block_id: str):
+    """Удаляет блок в Notion."""
+    url = f"https://api.notion.com/v1/blocks/{block_id}"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Notion-Version': '2022-06-28'}
+    requests.delete(url, headers=headers, timeout=DEFAULT_TIMEOUT)
+
+
+def replace_page_content(page_id: str, new_content: str):
+    """Заменяет весь контент страницы на новый (для полировки).
+    
+    1. Удаляет все существующие блоки
+    2. Добавляет новые блоки из new_content
+    """
+    # 1. Получаем и удаляем все блоки
+    blocks = get_page_blocks(page_id)
+    for block in blocks:
+        try:
+            delete_block(block['id'])
+        except Exception as e:
+            print(f"Ошибка удаления блока {block['id']}: {e}")
+    
+    # 2. Добавляем новый контент
+    add_to_notion_page(page_id, new_content)
+
+
+def rename_page(page_id: str, new_title: str):
+    """Переименовывает страницу Notion."""
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    payload = {
+        'properties': {
+            'Name': {'title': [{'type': 'text', 'text': {'content': new_title}}]}
+        }
+    }
+    response = requests.patch(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
+    response.raise_for_status()
+    print(f"Страница {page_id} переименована в '{new_title}'")
+
+
 def get_and_delete_last_log():
     """Получает последнюю запись из лога, извлекает данные и удаляет запись."""
     log_db_id = NOTION_LOG_DB_ID
@@ -239,14 +309,30 @@ def log_last_action(properties: dict = None, notion_page_id: str = None, gcal_ev
         print(f"КРИТИЧЕСКАЯ ОШИБКА ЛОГИРОВАНИЯ: {e}")
 
 
-def set_user_state(user_id: str, state: str, page_id: str):
-    """Создает запись о намерении пользователя в лог-базе."""
+def set_user_state(user_id: str, state: str, page_id: str, pending_edit_text: str = None):
+    """Создает запись о намерении пользователя в лог-базе.
+    
+    Args:
+        user_id: ID пользователя Telegram
+        state: Тип состояния (awaiting_add_text, awaiting_rename, pending_edit, etc.)
+        page_id: ID страницы Notion для операции
+        pending_edit_text: Текст, который нужно добавить (для pending_edit)
+    """
+    if state is None:
+        # Очистка состояния - удаляем последнюю запись состояния
+        return
+    
     properties = {
         'Name': {'title': [{'type': 'text', 'text': {'content': f"State for {user_id}: {state}"}}]},
         'UserID': {'rich_text': [{'type': 'text', 'text': {'content': user_id}}]},
-        'NotionPageID': {'rich_text': [{'type': 'text', 'text': {'content': page_id}}]},
+        'NotionPageID': {'rich_text': [{'type': 'text', 'text': {'content': page_id or ''}}]},
         'State': {'select': {'name': state}}
     }
+    
+    # Храним pending_edit_text в GCalEventID поле (переиспользуем для экономии)
+    if pending_edit_text:
+        properties['GCalEventID'] = {'rich_text': [{'type': 'text', 'text': {'content': pending_edit_text[:2000]}}]}
+    
     log_last_action(properties=properties)
 
 
@@ -281,7 +367,8 @@ def get_user_state(user_id: str):
     
     state_details = {
         'state': properties.get('State', {}).get('select', {}).get('name'),
-        'page_id': get_text(properties.get('NotionPageID'))
+        'page_id': get_text(properties.get('NotionPageID')),
+        'pending_edit_text': get_text(properties.get('GCalEventID'))  # Переиспользуем поле
     }
     
     delete_notion_page(state_page_id)
