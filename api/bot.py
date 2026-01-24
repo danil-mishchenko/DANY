@@ -40,7 +40,9 @@ try:
         get_and_delete_last_log,
         log_last_action,
         set_user_state,
-        get_user_state
+        get_user_state,
+        get_last_created_page_id,
+        get_page_title
     )
     from services.calendar import (
         create_google_calendar_event,
@@ -239,6 +241,58 @@ class handler(BaseHTTPRequestHandler):
                 
             elif text == '/undo':
                 send_telegram_message(chat_id, "Пожалуйста, используйте кнопку '↩️ Отменить' под сообщением.")
+                self.send_response(200)
+                self.end_headers()
+                return
+            
+            elif text.startswith('/edit'):
+                # /edit <текст> — добавить текст в последнюю заметку
+                edit_text = text[5:].strip()  # Убираем '/edit' и пробелы
+                
+                if not edit_text:
+                    # Если текст не указан, показываем справку
+                    send_telegram_message(
+                        chat_id, 
+                        "📝 *Редактирование заметок*\n\n"
+                        "Используйте: `/edit <текст>`\n\n"
+                        "Пример: `/edit И ещё купить хлеб`\n\n"
+                        "Текст будет добавлен в конец последней созданной заметки."
+                    )
+                    self.send_response(200)
+                    self.end_headers()
+                    return
+                
+                # Получаем ID последней заметки
+                last_page_id = get_last_created_page_id()
+                
+                if not last_page_id:
+                    send_telegram_message(
+                        chat_id, 
+                        "❌ Не удалось найти последнюю заметку.\n\n"
+                        "Возможно, лог действий пуст или не настроен."
+                    )
+                    self.send_response(200)
+                    self.end_headers()
+                    return
+                
+                try:
+                    # Получаем название заметки для подтверждения
+                    page_title = get_page_title(last_page_id)
+                    
+                    # Добавляем текст в заметку
+                    add_to_notion_page(last_page_id, edit_text)
+                    
+                    send_telegram_message(
+                        chat_id, 
+                        f"✅ Добавлено в *{page_title}*:\n\n_{edit_text}_"
+                    )
+                except Exception as e:
+                    print(f"Ошибка при редактировании заметки: {e}")
+                    send_telegram_message(
+                        chat_id, 
+                        f"❌ Ошибка при добавлении текста: {e}"
+                    )
+                
                 self.send_response(200)
                 self.end_headers()
                 return

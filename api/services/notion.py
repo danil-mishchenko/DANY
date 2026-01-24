@@ -121,6 +121,59 @@ def add_to_notion_page(page_id: str, text_to_add: str):
     requests.patch(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT).raise_for_status()
 
 
+def get_last_created_page_id():
+    """Получает ID последней созданной страницы из лога действий.
+    
+    Ищет записи с непустым NotionPageID и пустым State (т.е. это создание заметки, а не состояние).
+    """
+    log_db_id = NOTION_LOG_DB_ID
+    if not log_db_id:
+        return None
+    
+    query_url = f"https://api.notion.com/v1/databases/{log_db_id}/query"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    payload = {
+        "filter": {
+            "and": [
+                {"property": "NotionPageID", "rich_text": {"is_not_empty": True}},
+                {"property": "State", "select": {"is_empty": True}}
+            ]
+        },
+        "sorts": [{"timestamp": "created_time", "direction": "descending"}],
+        "page_size": 1
+    }
+    
+    response = requests.post(query_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
+    results = response.json().get('results', [])
+    
+    if not results:
+        return None
+    
+    properties = results[0]['properties']
+    notion_page_id = properties.get('NotionPageID', {}).get('rich_text', [])
+    if notion_page_id:
+        return notion_page_id[0]['text']['content']
+    return None
+
+
+def get_page_title(page_id: str) -> str:
+    """Получает заголовок страницы Notion по её ID."""
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Notion-Version': '2022-06-28'}
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
+        response.raise_for_status()
+        properties = response.json().get('properties', {})
+        title_prop = properties.get('Name', {}).get('title', [])
+        if title_prop:
+            return title_prop[0].get('plain_text', 'Без названия')
+    except Exception as e:
+        print(f"Ошибка получения заголовка страницы {page_id}: {e}")
+    
+    return "Без названия"
+
+
 def get_and_delete_last_log():
     """Получает последнюю запись из лога, извлекает данные и удаляет запись."""
     log_db_id = NOTION_LOG_DB_ID
