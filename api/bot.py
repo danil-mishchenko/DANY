@@ -112,12 +112,17 @@ class handler(BaseHTTPRequestHandler):
                         page_title = get_page_title(page_id_to_delete)
                         delete_notion_page(page_id_to_delete)
                         # Редактируем сообщение вместо отправки нового
-                        restore_button = [[{"text": "♻️ Восстановить", "callback_data": f"restore_{page_id_to_delete}"}]]
+                        buttons = [
+                            [
+                                {"text": "♻️ Восстановить", "callback_data": f"restore_{page_id_to_delete}"},
+                                {"text": "🔙 К списку", "callback_data": "back_to_notes_list"}
+                            ]
+                        ]
                         edit_telegram_message(
                             chat_id, 
                             message_id, 
                             f"🗑️ ~{page_title}~ удалена",
-                            inline_buttons=restore_button
+                            inline_buttons=buttons
                         )
                     except Exception as e:
                         edit_telegram_message(chat_id, message_id, f"❌ Ошибка: {e}")
@@ -147,6 +152,55 @@ class handler(BaseHTTPRequestHandler):
                     set_user_state(str(chat_id), 'awaiting_add_text', page_id)
                     send_telegram_message(chat_id, "▶️ Введите текст, который нужно *добавить* в конец заметки:")
                 
+                elif callback_data == 'back_to_notes_list':
+                    # Возврат к списку заметок
+                    message_id = callback_query['message']['message_id']
+                    # Получаем свежий список заметок
+                    latest_notes = get_latest_notes(5)
+                    
+                    if not latest_notes:
+                         edit_telegram_message(chat_id, message_id, "😔 Заметок пока нет.")
+                    else:
+                        message_text = "📋 *Ваши последние заметки:*\n\n"
+                        navigation_buttons = []
+                        for i, note in enumerate(latest_notes):
+                            page_id = note['id']
+                            title_parts = note.get('properties', {}).get('Name', {}).get('title', [])
+                            full_title = title_parts[0]['plain_text'] if title_parts else "Без названия"
+                            button_title = (full_title[:20] + '..') if len(full_title) > 20 else full_title
+                            
+                            message_text += f"*{i+1}. {full_title}*\n"
+                            navigation_buttons.append([{"text": f"{i+1}. {button_title}", "callback_data": f"note_menu_{page_id}"}])
+                        
+                        edit_telegram_message(chat_id, message_id, message_text, inline_buttons=navigation_buttons)
+
+                elif callback_data.startswith('note_menu_'):
+                    # Открытие меню конкретной заметки
+                    page_id = callback_data.replace('note_menu_', '')
+                    message_id = callback_query['message']['message_id']
+                    try:
+                        title = get_page_title(page_id)
+                        preview = get_page_preview(page_id, max_chars=100)
+                        
+                        buttons = [
+                            [
+                                {"text": "👁️ Просмотр", "callback_data": f"view_page_{page_id}"},
+                                {"text": "✏️ Переименовать", "callback_data": f"rename_page_{page_id}"},
+                            ],
+                            [
+                                {"text": "➕ Добавить текст", "callback_data": f"add_to_notion_{page_id}"},
+                                {"text": "🗑️ Удалить", "callback_data": f"delete_notion_{page_id}"}
+                            ],
+                            [
+                                {"text": "🔙 Назад к списку", "callback_data": "back_to_notes_list"}
+                            ]
+                        ]
+                        
+                        msg = f"📋 *{title}*\n\n_{preview['preview']}_"
+                        edit_telegram_message(chat_id, message_id, msg, inline_buttons=buttons)
+                    except Exception as e:
+                        edit_telegram_message(chat_id, message_id, f"❌ Ошибка загрузки заметки: {e}")
+
                 elif callback_data.startswith('rename_page_'):
                     page_id = callback_data.replace('rename_page_', '')
                     set_user_state(str(chat_id), 'awaiting_rename', page_id)
@@ -154,13 +208,17 @@ class handler(BaseHTTPRequestHandler):
                 
                 elif callback_data.startswith('view_page_'):
                     page_id = callback_data.replace('view_page_', '')
+                    message_id = callback_query['message']['message_id']
                     try:
                         title = get_page_title(page_id)
                         content = get_notion_page_content(page_id)
-                        # Ограничиваем длину для Telegram (4096 символов)
-                        if len(content) > 3500:
-                            content = content[:3500] + "\n\n... _(текст обрезан)_"
-                        send_telegram_message(chat_id, f"📋 *{title}*\n\n{content}")
+                        # Ограничиваем длину для Telegram
+                        if len(content) > 3000:
+                            content = content[:3000] + "\n\n... _(текст обрезан)_"
+                        
+                        buttons = [[{"text": "🔙 Назад", "callback_data": f"note_menu_{page_id}"}]]
+                        
+                        edit_telegram_message(chat_id, message_id, f"📋 *{title}*\n\n{content}", inline_buttons=buttons)
                     except Exception as e:
                         send_telegram_message(chat_id, f"❌ Ошибка при загрузке: {e}")
                 
@@ -350,25 +408,31 @@ class handler(BaseHTTPRequestHandler):
                 if not latest_notes:
                     send_telegram_message(chat_id, "😔 Заметок пока нет.", show_keyboard=True)
                 else:
-                    # Формируем одно сообщение со всеми заметками
+                    # Формируем одно сообщение со списком
+                    message_text = "📋 *Ваши последние заметки:*\n\n"
+                    navigation_buttons = []
+                    
                     for i, note in enumerate(latest_notes):
                         page_id = note['id']
                         title_parts = note.get('properties', {}).get('Name', {}).get('title', [])
-                        page_title = title_parts[0]['plain_text'] if title_parts else "Без названия"
-                        # Получаем превью контента
-                        preview = get_page_preview(page_id, max_chars=60)
-                        preview_text = preview['preview'] if preview['preview'] else "_пусто_"
                         
-                        # Кнопки для каждой заметки
-                        buttons = [[
-                            {"text": "👁️", "callback_data": f"view_page_{page_id}"},
-                            {"text": "➕", "callback_data": f"add_to_notion_{page_id}"},
-                            {"text": "✏️", "callback_data": f"rename_page_{page_id}"},
-                            {"text": "🗑️", "callback_data": f"delete_notion_{page_id}"}
-                        ]]
+                        # Безопасное получение заголовка
+                        if title_parts:
+                            full_title = title_parts[0]['plain_text']
+                        else:
+                            full_title = "Без названия"
+                            
+                        # Обрезаем длинные заголовки для меню
+                        button_title = (full_title[:20] + '..') if len(full_title) > 20 else full_title
                         
-                        note_text = f"📋 *{page_title}*\n_{preview_text}_"
-                        send_message_with_buttons(chat_id, note_text, buttons)
+                        # Формируем строку списка (1. Заголовок)
+                        message_text += f"*{i+1}. {full_title}*\n"
+                        
+                        # Добавляем кнопку навигации
+                        # Используем callback note_menu_{page_id} для открытия меню действий
+                        navigation_buttons.append([{"text": f"{i+1}. {button_title}", "callback_data": f"note_menu_{page_id}"}])
+                    
+                    send_message_with_buttons(chat_id, message_text, navigation_buttons)
                 
                 self.send_response(200)
                 self.end_headers()
