@@ -112,6 +112,15 @@ def delete_notion_page(page_id):
     print(f"Страница Notion {page_id} удалена.")
 
 
+def restore_notion_page(page_id):
+    """Восстанавливает (разархивирует) страницу в Notion."""
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    payload = {'archived': False}
+    requests.patch(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
+    print(f"Страница Notion {page_id} восстановлена.")
+
+
 def add_to_notion_page(page_id: str, text_to_add: str):
     """Добавляет новые блоки текста в конец страницы Notion."""
     url = f"https://api.notion.com/v1/blocks/{page_id}/children"

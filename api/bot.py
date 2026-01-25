@@ -106,11 +106,41 @@ class handler(BaseHTTPRequestHandler):
                 
                 elif callback_data.startswith('delete_notion_'):
                     page_id_to_delete = callback_data.split('_', 2)[2]
+                    message_id = callback_query['message']['message_id']
                     try:
+                        # Получаем название перед удалением
+                        page_title = get_page_title(page_id_to_delete)
                         delete_notion_page(page_id_to_delete)
-                        send_telegram_message(chat_id, f"🗑️ Заметка удалена.")
+                        # Редактируем сообщение вместо отправки нового
+                        restore_button = [[{"text": "♻️ Восстановить", "callback_data": f"restore_{page_id_to_delete}"}]]
+                        edit_telegram_message(
+                            chat_id, 
+                            message_id, 
+                            f"🗑️ ~{page_title}~ удалена",
+                            inline_buttons=restore_button
+                        )
                     except Exception as e:
-                        send_telegram_message(chat_id, f"❌ Не удалось удалить заметку. Ошибка: {e}")
+                        edit_telegram_message(chat_id, message_id, f"❌ Ошибка: {e}")
+                
+                elif callback_data.startswith('restore_'):
+                    page_id_to_restore = callback_data.replace('restore_', '')
+                    message_id = callback_query['message']['message_id']
+                    try:
+                        from services.notion import restore_notion_page
+                        restore_notion_page(page_id_to_restore)
+                        page_title = get_page_title(page_id_to_restore)
+                        preview = get_page_preview(page_id_to_restore, max_chars=60)
+                        # Восстанавливаем оригинальные кнопки
+                        buttons = [[
+                            {"text": "👁️", "callback_data": f"view_page_{page_id_to_restore}"},
+                            {"text": "➕", "callback_data": f"add_to_notion_{page_id_to_restore}"},
+                            {"text": "✏️", "callback_data": f"rename_page_{page_id_to_restore}"},
+                            {"text": "🗑️", "callback_data": f"delete_notion_{page_id_to_restore}"}
+                        ]]
+                        note_text = f"📋 *{page_title}*\n_{preview['preview']}_"
+                        edit_telegram_message(chat_id, message_id, note_text, inline_buttons=buttons)
+                    except Exception as e:
+                        edit_telegram_message(chat_id, message_id, f"❌ Ошибка восстановления: {e}")
 
                 elif callback_data.startswith('add_to_notion_'):
                     page_id = callback_data.split('_', 3)[3]
@@ -314,33 +344,32 @@ class handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             
-            elif text == '/notes':
-                send_telegram_message(chat_id, "🔎 Ищу 3 последние заметки...")
-                latest_notes = get_latest_notes(3)
+            elif text == '/notes' or text == '📝 Заметки':
+                send_telegram_message(chat_id, "🔎 Загружаю последние заметки...")
+                latest_notes = get_latest_notes(5)
                 if not latest_notes:
-                    send_telegram_message(chat_id, "😔 Заметок пока нет.")
+                    send_telegram_message(chat_id, "😔 Заметок пока нет.", show_keyboard=True)
                 else:
-                    send_telegram_message(chat_id, f"👇 Вот что я нашел:")
-                    for note in latest_notes:
+                    # Формируем одно сообщение со всеми заметками
+                    for i, note in enumerate(latest_notes):
                         page_id = note['id']
                         title_parts = note.get('properties', {}).get('Name', {}).get('title', [])
                         page_title = title_parts[0]['plain_text'] if title_parts else "Без названия"
-                        keyboard = {"inline_keyboard": [[ 
-                            {"text": "➕ Добавить", "callback_data": f"add_to_notion_{page_id}"}, 
-                            {"text": "🗑️ Удалить", "callback_data": f"delete_notion_{page_id}"} 
-                        ]]}
-                        message_text = f"*{page_title}*"
-                        payload = {
-                            'chat_id': chat_id, 
-                            'text': message_text, 
-                            'parse_mode': 'Markdown', 
-                            'reply_markup': json.dumps(keyboard)
-                        }
-                        requests.post(
-                            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", 
-                            json=payload, 
-                            timeout=DEFAULT_TIMEOUT
-                        )
+                        # Получаем превью контента
+                        preview = get_page_preview(page_id, max_chars=60)
+                        preview_text = preview['preview'] if preview['preview'] else "_пусто_"
+                        
+                        # Кнопки для каждой заметки
+                        buttons = [[
+                            {"text": "👁️", "callback_data": f"view_page_{page_id}"},
+                            {"text": "➕", "callback_data": f"add_to_notion_{page_id}"},
+                            {"text": "✏️", "callback_data": f"rename_page_{page_id}"},
+                            {"text": "🗑️", "callback_data": f"delete_notion_{page_id}"}
+                        ]]
+                        
+                        note_text = f"📋 *{page_title}*\n_{preview_text}_"
+                        send_message_with_buttons(chat_id, note_text, buttons)
+                
                 self.send_response(200)
                 self.end_headers()
                 return
