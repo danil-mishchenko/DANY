@@ -55,7 +55,7 @@ try:
     )
     from services.ai import (
         transcribe_with_assemblyai,
-        process_with_deepseek,
+        process_with_ai,
         summarize_for_search,
         polish_content
     )
@@ -568,7 +568,7 @@ class handler(BaseHTTPRequestHandler):
                     progress_bar = "🟩🟩⬜️⬜️⬜️⬜️ 33%"
                     edit_telegram_message(chat_id, status_message_id, f"⏳ Анализирую...\n`{progress_bar}`")
                 
-                ai_data = process_with_deepseek(text_to_process)
+                ai_data = process_with_ai(text_to_process)
                 notion_title = ai_data.get('main_title', 'Новая заметка')
                 notion_category = ai_data.get('category', 'Мысль')
                 formatted_body = ai_data.get('formatted_body', text_to_process)
