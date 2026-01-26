@@ -130,6 +130,37 @@ def add_to_notion_page(page_id: str, text_to_add: str):
     requests.patch(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT).raise_for_status()
 
 
+def add_image_to_page(page_id: str, image_url: str, caption: str = None):
+    """Добавляет изображение в конец страницы Notion.
+    
+    Args:
+        page_id: ID страницы Notion
+        image_url: Публичный HTTPS URL изображения
+        caption: Опциональная подпись к изображению
+    """
+    url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+    headers = {
+        'Authorization': f'Bearer {NOTION_TOKEN}', 
+        'Content-Type': 'application/json', 
+        'Notion-Version': '2022-06-28'
+    }
+    
+    image_block = {
+        "object": "block",
+        "type": "image",
+        "image": {
+            "type": "external",
+            "external": {"url": image_url}
+        }
+    }
+    
+    if caption:
+        image_block["image"]["caption"] = [{"type": "text", "text": {"content": caption}}]
+    
+    payload = {"children": [image_block]}
+    requests.patch(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT).raise_for_status()
+
+
 def get_last_created_page_id():
     """Получает ID последней созданной страницы из лога действий.
     

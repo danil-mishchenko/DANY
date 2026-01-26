@@ -27,6 +27,7 @@ try:
     # --- Services ---
     from services.telegram import (
         download_telegram_file,
+        get_telegram_file_url,
         send_telegram_message,
         send_initial_status_message,
         edit_telegram_message,
@@ -39,6 +40,7 @@ try:
         create_notion_page,
         delete_notion_page,
         add_to_notion_page,
+        add_image_to_page,
         get_and_delete_last_log,
         log_last_action,
         set_user_state,
@@ -548,7 +550,43 @@ class handler(BaseHTTPRequestHandler):
             # --- ЛОГИКА СОЗДАНИЯ НОВОЙ ЗАМЕТКИ (если это не команда) ---
             text_to_process = None
             is_text_message = False
-            if 'voice' in message:
+            photo_urls = []
+            
+            # Обработка фото
+            if 'photo' in message:
+                # Telegram присылает массив размеров, берём наибольший (последний)
+                best_photo = message['photo'][-1]
+                file_id = best_photo['file_id']
+                
+                try:
+                    photo_url = get_telegram_file_url(file_id)
+                    photo_urls.append(photo_url)
+                    caption = message.get('caption', '').strip()
+                    
+                    if caption:
+                        # Фото с подписью — создаём новую заметку
+                        send_telegram_message(chat_id, "📸 Обрабатываю фото с подписью...")
+                        text_to_process = caption
+                    else:
+                        # Фото без подписи — добавляем к последней заметке
+                        last_page_id = get_last_created_page_id()
+                        if last_page_id:
+                            add_image_to_page(last_page_id, photo_url)
+                            page_title = get_page_title(last_page_id)
+                            send_telegram_message(chat_id, f"📸 Фото добавлено в *{page_title}*!", show_keyboard=True)
+                        else:
+                            send_telegram_message(chat_id, "❌ Нет заметок для добавления фото. Отправьте фото с подписью, чтобы создать новую.", show_keyboard=True)
+                        self.send_response(200)
+                        self.end_headers()
+                        return
+                        
+                except Exception as e:
+                    send_telegram_message(chat_id, f"❌ Ошибка обработки фото: {e}", show_keyboard=True)
+                    self.send_response(200)
+                    self.end_headers()
+                    return
+            
+            elif 'voice' in message:
                 send_telegram_message(chat_id, "⏳ Распознаю речь...")
                 audio_bytes = download_telegram_file(message['voice']['file_id']).read()
                 text_to_process = transcribe_with_assemblyai(audio_bytes)
@@ -581,6 +619,12 @@ class handler(BaseHTTPRequestHandler):
                     notion_page_id = create_notion_page(notion_title, formatted_body, notion_category)
                     if notion_page_id: 
                         log_last_action(notion_page_id=notion_page_id)
+                        # Прикрепляем фото к созданной заметке
+                        for photo_url in photo_urls:
+                            try:
+                                add_image_to_page(notion_page_id, photo_url)
+                            except Exception as img_err:
+                                print(f"Ошибка добавления фото: {img_err}")
                     if not is_text_message:
                         send_telegram_message(
                             chat_id, 

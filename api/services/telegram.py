@@ -34,6 +34,27 @@ def download_telegram_file(file_id: str) -> io.BytesIO:
     return io.BytesIO(file_response.content)
 
 
+def get_telegram_file_url(file_id: str) -> str:
+    """Получает публичный URL файла из Telegram.
+    
+    Используется для прикрепления изображений к Notion через external URL.
+    URL действителен ~1 час.
+    
+    Returns:
+        Публичный HTTPS URL файла
+    """
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}"
+    response = requests.get(url, timeout=DEFAULT_TIMEOUT)
+    response.raise_for_status()
+    data = response.json()
+    
+    if 'result' not in data or 'file_path' not in data['result']:
+        raise ValueError(f"Не удалось получить путь к файлу: {data}")
+    
+    file_path = data['result']['file_path']
+    return f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+
+
 def send_telegram_message(chat_id: str, text: str, use_html: bool = False, add_undo_button: bool = False, show_keyboard: bool = False):
     """Отправляет текстовое сообщение пользователю.
     
