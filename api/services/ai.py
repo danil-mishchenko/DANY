@@ -8,7 +8,8 @@ from utils.config import (
     OPENAI_API_KEY, 
     ASSEMBLYAI_API_KEY, 
     DEFAULT_TIMEOUT, 
-    MAX_POLLING_ATTEMPTS
+    MAX_POLLING_ATTEMPTS,
+    USER_TIMEZONE
 )
 
 
@@ -63,14 +64,23 @@ def transcribe_with_assemblyai(audio_file_bytes) -> str:
 def process_with_ai(text: str) -> dict:
     """Отправляет текст в GPT-4o mini для умного форматирования и извлечения данных."""
     from datetime import datetime
+    import pytz
     
     url = "https://api.openai.com/v1/chat/completions"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {OPENAI_API_KEY}"}
     
-    current_datetime_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    # Используем timezone пользователя для корректного расчёта относительного времени
+    tz = pytz.timezone(USER_TIMEZONE)
+    current_datetime = datetime.now(tz)
+    current_datetime_str = current_datetime.strftime('%Y-%m-%d %H:%M:%S')
     
     prompt = f"""
-    Твоя роль: умный редактор заметок. Проанализируй заметку пользователя. Текущее время для расчетов: {current_datetime_str}.
+    Твоя роль: умный редактор заметок. Проанализируй заметку пользователя.
+    
+    КРИТИЧЕСКИ ВАЖНО: Текущее время пользователя (timezone {USER_TIMEZONE}): {current_datetime_str}
+    При расчёте относительного времени ("через N минут", "через час") ОБЯЗАТЕЛЬНО прибавляй N к текущему времени {current_datetime_str}.
+    Например: если сейчас 17:51 и пользователь говорит "через 16 минут", то datetime_iso должен быть 18:07.
+    
     Задачи:
     1. Язык: Сохраняй язык оригинала. Не переводи.
     2. Заголовок и Категория: Создай емкий заголовок и определи категорию из списка: [Идея, Задача, Покупка, Встреча, Мысль, Ссылка, Цитата].
@@ -83,7 +93,7 @@ def process_with_ai(text: str) -> dict:
     5. События: Найди ВСЕ события с датой/временем. Учитывай относительные даты ("завтра", "через 30 минут"). Если их нет - верни пустой список "events": [].
     6. is_reminder_only: Если сообщение содержит ТОЛЬКО напоминание/событие без дополнительного контента (примеры: "напомни завтра оплатить счёт", "встреча в 15:00", "через час позвонить маме"), установи true. Если есть дополнительная информация, мысли, идеи — false.
     7. Результат: Верни строго JSON.
-    Формат JSON: {{"main_title": "...", "category": "...", "formatted_body": "...", "is_reminder_only": true/false, "events": [{{"title": "...", "datetime_iso": "..."}}]}}
+    Формат JSON: {{"main_title": "...", "category": "...", "formatted_body": "...", "is_reminder_only": true/false, "events": [{{"title": "...", "datetime_iso": "YYYY-MM-DDTHH:MM:SS"}}]}}
     Заметка: --- {text} ---
     """
     data = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}}

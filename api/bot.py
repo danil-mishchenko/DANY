@@ -655,7 +655,7 @@ class handler(BaseHTTPRequestHandler):
                         progress_bar = "🟩🟩🟩🟩🟩🟩 99%"
                         edit_telegram_message(chat_id, status_message_id, f"⏳ Добавляю в календарь...\n`{progress_bar}`")
                     
-                    created_events_titles = []
+                    created_events_info = []  # [(title, datetime_iso), ...]
                     created_events_links = []
                     for event in valid_events:
                         try:
@@ -667,12 +667,23 @@ class handler(BaseHTTPRequestHandler):
                             if gcal_result and gcal_result.get('id'): 
                                 log_last_action(gcal_event_id=gcal_result['id'])
                                 created_events_links.append(gcal_result.get('html_link'))
-                            created_events_titles.append(event['title'])
+                            created_events_info.append((event['title'], event['datetime_iso']))
                         except Exception as e:
                             send_telegram_message(chat_id, f"❌ *Ошибка при создании события '{event['title']}':*\n`{e}`")
                     
-                    if created_events_titles:
-                        final_text = f"📅 *Напоминание создано!*\n\n- " + "\n- ".join(created_events_titles)
+                    if created_events_info:
+                        # Форматируем события с датой и временем
+                        from datetime import datetime
+                        events_text = []
+                        for title, dt_iso in created_events_info:
+                            try:
+                                dt = datetime.fromisoformat(dt_iso)
+                                formatted_dt = dt.strftime('%d.%m.%Y в %H:%M')
+                                events_text.append(f"*{title}*\n   📆 {formatted_dt}")
+                            except:
+                                events_text.append(f"*{title}*")
+                        
+                        final_text = f"📅 *Напоминание создано!*\n\n" + "\n\n".join(events_text)
                         action_buttons = [[{"text": "↩️ Отменить", "callback_data": "undo_last_action"}]]
                         
                         if created_events_links and created_events_links[0]:
