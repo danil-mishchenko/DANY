@@ -12,7 +12,7 @@ def get_persistent_keyboard():
     return {
         "keyboard": [
             [{"text": "📝 Заметки"}, {"text": "🔍 Поиск"}],
-            [{"text": "✏️ Изменить"}, {"text": "↩️ Отмена"}]
+            [{"text": "✏️ Изменить"}, {"text": "⚙️ Настройки"}]
         ],
         "resize_keyboard": True,
         "is_persistent": True

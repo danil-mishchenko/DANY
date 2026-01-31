@@ -49,7 +49,9 @@ try:
         get_page_title,
         get_page_preview,
         replace_page_content,
-        rename_page
+        rename_page,
+        get_user_settings,
+        set_user_settings
     )
     from services.calendar import (
         create_google_calendar_event,
@@ -259,6 +261,16 @@ class handler(BaseHTTPRequestHandler):
                     else:
                         send_telegram_message(chat_id, "❌ Текст для добавления не найден.")
                 
+                elif callback_data.startswith('set_reminder_'):
+                    # Обработка установки времени напоминания
+                    minutes = int(callback_data.replace('set_reminder_', ''))
+                    set_user_settings(str(chat_id), minutes)
+                    
+                    if minutes == 0:
+                        send_telegram_message(chat_id, "🔕 Уведомления в Telegram *отключены*.", show_keyboard=True)
+                    else:
+                        send_telegram_message(chat_id, f"✅ Уведомления будут приходить за *{minutes} мин* до события.", show_keyboard=True)
+                
                 self.send_response(200)
                 self.end_headers()
                 return
@@ -376,8 +388,28 @@ class handler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.end_headers()
                 return
-            elif text == "↩️ Отмена":
-                text = "/undo"
+            elif text == "⚙️ Настройки":
+                # Показываем меню настроек
+                settings = get_user_settings(user_id)
+                current_minutes = settings.get('reminder_minutes', 15)
+                
+                buttons = [
+                    [
+                        {"text": "5 мин" + (" ✓" if current_minutes == 5 else ""), "callback_data": "set_reminder_5"},
+                        {"text": "15 мин" + (" ✓" if current_minutes == 15 else ""), "callback_data": "set_reminder_15"},
+                        {"text": "30 мин" + (" ✓" if current_minutes == 30 else ""), "callback_data": "set_reminder_30"}
+                    ],
+                    [
+                        {"text": "1 час" + (" ✓" if current_minutes == 60 else ""), "callback_data": "set_reminder_60"},
+                        {"text": "Выкл" + (" ✓" if current_minutes == 0 else ""), "callback_data": "set_reminder_0"}
+                    ]
+                ]
+                
+                msg = f"⚙️ *Настройки уведомлений*\n\n📱 За сколько минут до события присылать напоминание в Telegram?\n\n_Текущее: {current_minutes} мин_"
+                send_message_with_buttons(chat_id, msg, buttons)
+                self.send_response(200)
+                self.end_headers()
+                return
 
             if text == '/index_all':
                 send_telegram_message(chat_id, "Начинаю полную индексацию всех заметок. Это может занять время...")
@@ -610,11 +642,57 @@ class handler(BaseHTTPRequestHandler):
                 notion_title = ai_data.get('main_title', 'Новая заметка')
                 notion_category = ai_data.get('category', 'Мысль')
                 formatted_body = ai_data.get('formatted_body', text_to_process)
+                is_reminder_only = ai_data.get('is_reminder_only', False)
                 
+                valid_events = [
+                    event for event in ai_data.get('events', []) 
+                    if event and event.get('title') and event.get('datetime_iso')
+                ]
+                
+                # --- РЕЖИМ ТОЛЬКО НАПОМИНАНИЕ (без Notion) ---
+                if is_reminder_only and valid_events:
+                    if status_message_id:
+                        progress_bar = "🟩🟩🟩🟩🟩🟩 99%"
+                        edit_telegram_message(chat_id, status_message_id, f"⏳ Добавляю в календарь...\n`{progress_bar}`")
+                    
+                    created_events_titles = []
+                    created_events_links = []
+                    for event in valid_events:
+                        try:
+                            gcal_result = create_google_calendar_event(
+                                event['title'], 
+                                formatted_body, 
+                                event['datetime_iso']
+                            )
+                            if gcal_result and gcal_result.get('id'): 
+                                log_last_action(gcal_event_id=gcal_result['id'])
+                                created_events_links.append(gcal_result.get('html_link'))
+                            created_events_titles.append(event['title'])
+                        except Exception as e:
+                            send_telegram_message(chat_id, f"❌ *Ошибка при создании события '{event['title']}':*\n`{e}`")
+                    
+                    if created_events_titles:
+                        final_text = f"📅 *Напоминание создано!*\n\n- " + "\n- ".join(created_events_titles)
+                        action_buttons = [[{"text": "↩️ Отменить", "callback_data": "undo_last_action"}]]
+                        
+                        if created_events_links and created_events_links[0]:
+                            action_buttons.append([{"text": "📅 Открыть в календаре", "url": created_events_links[0]}])
+                        
+                        if status_message_id:
+                            edit_telegram_message(chat_id, status_message_id, final_text, inline_buttons=action_buttons)
+                        else:
+                            send_message_with_buttons(chat_id, final_text, action_buttons)
+                    
+                    self.send_response(200)
+                    self.end_headers()
+                    return
+                
+                # --- ОБЫЧНЫЙ РЕЖИМ (Notion + календарь) ---
                 if status_message_id:
                     progress_bar = "🟩🟩🟩🟩⬜️⬜️ 66%"
                     edit_telegram_message(chat_id, status_message_id, f"⏳ Сохраняю в Notion...\n`{progress_bar}`")
 
+                notion_page_id = None
                 try:
                     notion_page_id = create_notion_page(notion_title, formatted_body, notion_category)
                     if notion_page_id: 
@@ -642,24 +720,22 @@ class handler(BaseHTTPRequestHandler):
                     self.end_headers()
                     return
 
-                valid_events = [
-                    event for event in ai_data.get('events', []) 
-                    if event and event.get('title') and event.get('datetime_iso')
-                ]
                 created_events_titles = []
+                created_events_links = []
                 if valid_events:
                     if status_message_id:
                         progress_bar = "🟩🟩🟩🟩🟩🟩 99%"
                         edit_telegram_message(chat_id, status_message_id, f"⏳ Добавляю в календарь...\n`{progress_bar}`")
                     for event in valid_events:
                         try:
-                            gcal_event_id = create_google_calendar_event(
+                            gcal_result = create_google_calendar_event(
                                 event['title'], 
                                 formatted_body, 
                                 event['datetime_iso']
                             )
-                            if gcal_event_id: 
-                                log_last_action(gcal_event_id=gcal_event_id)
+                            if gcal_result and gcal_result.get('id'): 
+                                log_last_action(gcal_event_id=gcal_result['id'])
+                                created_events_links.append(gcal_result.get('html_link'))
                             created_events_titles.append(event['title'])
                         except Exception as e:
                             send_telegram_message(chat_id, f"❌ *Ошибка при создании события '{event['title']}':*\n`{e}`")
@@ -681,6 +757,12 @@ class handler(BaseHTTPRequestHandler):
                         {"text": "↩️ Отменить", "callback_data": "undo_last_action"}
                     ]
                 ]
+                
+                # Добавляем кнопку календаря если есть события
+                if created_events_links and created_events_links[0]:
+                    action_buttons.append([
+                        {"text": "📅 Открыть в календаре", "url": created_events_links[0]}
+                    ])
                 
                 if status_message_id:
                     # Редактируем существующее сообщение с прогресс-баром

@@ -413,3 +413,70 @@ def get_user_state(user_id: str):
     
     delete_notion_page(state_page_id)
     return state_details
+
+
+def get_user_settings(user_id: str) -> dict:
+    """Получает настройки пользователя из лог-базы.
+    
+    Returns:
+        dict: {'reminder_minutes': int} или пустой dict если нет настроек
+    """
+    log_db_id = NOTION_LOG_DB_ID
+    if not log_db_id:
+        return {}
+    
+    payload = {
+        "filter": {"and": [
+            {"property": "UserID", "rich_text": {"equals": user_id}},
+            {"property": "State", "select": {"equals": "settings"}}
+        ]},
+        "page_size": 1
+    }
+    query_url = f"https://api.notion.com/v1/databases/{log_db_id}/query"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    response = requests.post(query_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
+    results = response.json().get('results', [])
+    
+    if not results:
+        return {'reminder_minutes': 15}  # Default
+    
+    properties = results[0]['properties']
+    reminder_text = properties.get('GCalEventID', {}).get('rich_text', [])
+    if reminder_text:
+        try:
+            return {'reminder_minutes': int(reminder_text[0]['text']['content'])}
+        except (ValueError, KeyError):
+            pass
+    return {'reminder_minutes': 15}
+
+
+def set_user_settings(user_id: str, reminder_minutes: int):
+    """Сохраняет настройки пользователя в лог-базу.
+    
+    Удаляет старые настройки и создаёт новые.
+    """
+    log_db_id = NOTION_LOG_DB_ID
+    if not log_db_id:
+        return
+    
+    # Удаляем старые настройки
+    payload = {
+        "filter": {"and": [
+            {"property": "UserID", "rich_text": {"equals": user_id}},
+            {"property": "State", "select": {"equals": "settings"}}
+        ]}
+    }
+    query_url = f"https://api.notion.com/v1/databases/{log_db_id}/query"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    response = requests.post(query_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
+    for result in response.json().get('results', []):
+        delete_notion_page(result['id'])
+    
+    # Создаём новые настройки
+    properties = {
+        'Name': {'title': [{'type': 'text', 'text': {'content': f"Settings for {user_id}"}}]},
+        'UserID': {'rich_text': [{'type': 'text', 'text': {'content': user_id}}]},
+        'State': {'select': {'name': 'settings'}},
+        'GCalEventID': {'rich_text': [{'type': 'text', 'text': {'content': str(reminder_minutes)}}]}
+    }
+    log_last_action(properties=properties)
