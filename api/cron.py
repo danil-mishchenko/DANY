@@ -1,10 +1,17 @@
 # -*- coding: utf-8 -*-
 """Cron endpoint для отправки Telegram уведомлений о ближайших событиях."""
+import sys
+import os
 from http.server import BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 import json
-import os
 import traceback
+
+# --- VERCEL PATH FIX ---
+current_dir = os.getcwd()
+api_dir = os.path.join(current_dir, 'api')
+if api_dir not in sys.path:
+    sys.path.append(api_dir)
 
 GOOGLE_CREDENTIALS_JSON = os.environ.get('GOOGLE_CREDENTIALS_JSON')
 GOOGLE_CALENDAR_ID = os.environ.get('GOOGLE_CALENDAR_ID')
