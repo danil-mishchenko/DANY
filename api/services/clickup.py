@@ -8,7 +8,7 @@ from utils.config import CLICKUP_API_TOKEN, CLICKUP_TEAM_ID, CLICKUP_USER_ID, DE
 CLICKUP_BASE_URL = "https://api.clickup.com/api/v2"
 
 # Статусы которые НЕ показываем в списке задач
-HIDDEN_STATUSES = {"на узгодження", "пауза проект", "проеб"}
+HIDDEN_STATUSES = {"на узгодження", "пауза проєкт", "пауза проект", "проеб"}
 
 # Маппинг приоритетов на эмодзи
 PRIORITY_EMOJI = {
