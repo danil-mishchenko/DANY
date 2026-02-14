@@ -7,6 +7,9 @@ from utils.config import CLICKUP_API_TOKEN, CLICKUP_TEAM_ID, CLICKUP_USER_ID, DE
 
 CLICKUP_BASE_URL = "https://api.clickup.com/api/v2"
 
+# Статусы которые НЕ показываем в списке задач
+HIDDEN_STATUSES = {"на узгодження", "пауза проект", "проеб"}
+
 # Маппинг приоритетов на эмодзи
 PRIORITY_EMOJI = {
     "urgent": "🔴",
@@ -61,6 +64,11 @@ def get_my_tasks(include_closed=False) -> list:
         for t in raw_tasks:
             priority = t.get('priority')
             p_name = priority.get('priority', 'none') if priority else 'none'
+            status_name = t.get('status', {}).get('status', '?')
+            
+            # Пропускаем скрытые статусы
+            if status_name.lower() in HIDDEN_STATUSES:
+                continue
             
             due_date = None
             if t.get('due_date'):
