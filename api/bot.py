@@ -57,6 +57,7 @@ try:
         create_google_calendar_event,
         delete_gcal_event
     )
+    from services.clickup import get_my_tasks, format_tasks_message
     from services.ai import (
         transcribe_with_assemblyai,
         process_with_ai,
@@ -271,6 +272,15 @@ class handler(BaseHTTPRequestHandler):
                     else:
                         send_telegram_message(chat_id, f"✅ Уведомления будут приходить за *{minutes} мин* до события.", show_keyboard=True)
                 
+                elif callback_data == 'clickup_refresh':
+                    # Обновляем список задач ClickUp
+                    tasks = get_my_tasks()
+                    msg = format_tasks_message(tasks)
+                    buttons = [[{"text": "🔄 Обновить", "callback_data": "clickup_refresh"}]]
+                    if tasks:
+                        buttons.append([{"text": "🌐 Открыть ClickUp", "url": "https://app.clickup.com"}])
+                    edit_telegram_message(chat_id, callback_query['message']['message_id'], msg, inline_buttons=buttons)
+                
                 self.send_response(200)
                 self.end_headers()
                 return
@@ -366,25 +376,17 @@ class handler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.end_headers()
                 return
-            elif text == "✏️ Изменить":
-                # Показываем последнюю заметку с кнопками
-                last_page_id = get_last_created_page_id()
-                if last_page_id:
-                    preview = get_page_preview(last_page_id)
-                    buttons = [
-                        [
-                            {"text": "✏️ Переименовать", "callback_data": f"rename_page_{last_page_id}"},
-                            {"text": "👁️ Просмотр", "callback_data": f"view_page_{last_page_id}"}
-                        ],
-                        [
-                            {"text": "➕ Добавить текст", "callback_data": f"add_to_notion_{last_page_id}"},
-                            {"text": "🗑️ Удалить", "callback_data": f"delete_notion_{last_page_id}"}
-                        ]
-                    ]
-                    msg = f"📋 *{preview['title']}*\n\n_{preview['preview']}_"
-                    send_message_with_buttons(chat_id, msg, buttons)
-                else:
-                    send_telegram_message(chat_id, "❌ Нет заметок для редактирования.", show_keyboard=True)
+            elif text == "📋 ClickUp":
+                # Показываем задачи из ClickUp
+                tasks = get_my_tasks()
+                msg = format_tasks_message(tasks)
+                
+                # Добавляем кнопки под сообщение
+                buttons = [[{"text": "🔄 Обновить", "callback_data": "clickup_refresh"}]]
+                if tasks:
+                    buttons.append([{"text": "🌐 Открыть ClickUp", "url": "https://app.clickup.com"}])
+                
+                send_message_with_buttons(chat_id, msg, buttons)
                 self.send_response(200)
                 self.end_headers()
                 return
