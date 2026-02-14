@@ -30,6 +30,24 @@ class handler(BaseHTTPRequestHandler):
             from services.telegram import send_telegram_message, send_message_with_buttons
             from services.notion import get_user_settings
             
+            # === УТРЕННИЙ БРИФИНГ (8:00) ===
+            tz = pytz.timezone(USER_TIMEZONE)
+            now_local = datetime.now(tz)
+            
+            # Если время 7:58 - 8:05, отправляем утренний брифинг
+            current_h = now_local.hour
+            current_m = now_local.minute
+            is_briefing_time = (current_h == 7 and current_m >= 58) or (current_h == 8 and current_m <= 5)
+            
+            if is_briefing_time and ALLOWED_TELEGRAM_ID:
+                try:
+                    from services.briefing import build_morning_briefing
+                    briefing_msg = build_morning_briefing()
+                    send_telegram_message(int(ALLOWED_TELEGRAM_ID), briefing_msg)
+                    print(f"Morning briefing sent at {now_local.strftime('%H:%M')}")
+                except Exception as e:
+                    print(f"Morning briefing error: {e}")
+            
             if not ALLOWED_TELEGRAM_ID:
                 result = {"status": "no user configured"}
                 self._respond(200, result)
