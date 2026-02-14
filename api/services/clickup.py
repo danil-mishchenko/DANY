@@ -84,10 +84,17 @@ def get_my_tasks(include_closed=False) -> list:
         return []
 
 
+def _escape_markdown(text: str) -> str:
+    """Экранирует спецсимволы Telegram Markdown."""
+    for char in ['*', '_', '`', '[', ']', '(', ')']:
+        text = text.replace(char, '')
+    return text
+
+
 def format_tasks_message(tasks: list) -> str:
     """Форматирует список задач в красивое Telegram сообщение."""
     if not tasks:
-        return "📋 *ClickUp*\n\n_Нет активных задач. Отлично!_ 🎉"
+        return "📋 *ClickUp*\n\nНет активных задач. Отлично! 🎉"
     
     # Сортируем: urgent → high → normal → low → none
     priority_order = {"urgent": 0, "high": 1, "normal": 2, "low": 3, "none": 4}
@@ -105,10 +112,12 @@ def format_tasks_message(tasks: list) -> str:
     
     for status, status_tasks in by_status.items():
         emoji = STATUS_EMOJI.get(status.lower(), "📌")
-        lines.append(f"\n{emoji} *{status.upper()}*")
+        safe_status = _escape_markdown(status.upper())
+        lines.append(f"\n{emoji} *{safe_status}*")
         
         for t in status_tasks:
             p_emoji = PRIORITY_EMOJI.get(t['priority'], '⚪️')
+            safe_name = _escape_markdown(t['name'])
             
             # Форматируем дедлайн
             due_str = ""
@@ -116,14 +125,15 @@ def format_tasks_message(tasks: list) -> str:
                 now = datetime.now()
                 diff = (t['due_date'].date() - now.date()).days
                 if diff < 0:
-                    due_str = f" ⚠️ _просрочено_"
+                    due_str = " ⚠️ просрочено"
                 elif diff == 0:
-                    due_str = f" 🔥 _сегодня_"
+                    due_str = " 🔥 сегодня"
                 elif diff == 1:
-                    due_str = f" ⏰ _завтра_"
+                    due_str = " ⏰ завтра"
                 else:
-                    due_str = f" 📅 _{t['due_date'].strftime('%d.%m')}_"
+                    due_str = f" 📅 {t['due_date'].strftime('%d.%m')}"
             
-            lines.append(f"  {p_emoji} {t['name']}{due_str}")
+            lines.append(f"  {p_emoji} {safe_name}{due_str}")
     
     return "\n".join(lines)
+
