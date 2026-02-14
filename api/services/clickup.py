@@ -77,13 +77,17 @@ def get_my_tasks(include_closed=False) -> list:
                 except (ValueError, TypeError):
                     pass
             
+            # Извлекаем теги (бренды)
+            tags = [tag.get('name', '') for tag in t.get('tags', [])]
+            
             tasks.append({
                 'name': t.get('name', ''),
                 'status': t.get('status', {}).get('status', '?'),
                 'priority': p_name,
                 'due_date': due_date,
                 'url': t.get('url', ''),
-                'id': t.get('id', '')
+                'id': t.get('id', ''),
+                'tags': tags
             })
         
         return tasks
@@ -127,6 +131,12 @@ def format_tasks_message(tasks: list) -> str:
             p_emoji = PRIORITY_EMOJI.get(t['priority'], '⚪️')
             safe_name = _escape_markdown(t['name'])
             
+            # Форматируем теги
+            tags_str = ""
+            if t.get('tags'):
+                safe_tags = [_escape_markdown(tag) for tag in t['tags']]
+                tags_str = f" *[{', '.join(safe_tags)}]*"
+            
             # Форматируем дедлайн
             due_str = ""
             if t['due_date']:
@@ -141,7 +151,7 @@ def format_tasks_message(tasks: list) -> str:
                 else:
                     due_str = f" 📅 {t['due_date'].strftime('%d.%m')}"
             
-            lines.append(f"  {p_emoji} {safe_name}{due_str}")
+            lines.append(f"  {p_emoji}{tags_str} {safe_name}{due_str}")
     
     return "\n".join(lines)
 
