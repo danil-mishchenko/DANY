@@ -203,7 +203,7 @@ def build_morning_briefing() -> str:
         lines.append("📅 *Расписание чистое* — свободный день для фокуса!")
         lines.append("")
 
-    lines.append("— — — — — — — — — —")
+    lines.append("–––––––")
 
     # ——— ГОРЯЩИЕ ЗАДАЧИ ———
     if urgent_tasks:
@@ -233,7 +233,7 @@ def build_morning_briefing() -> str:
         lines.append(f"📋 И ещё *{remaining}* задач в работе")
         lines.append("")
 
-    lines.append("— — — — — — — — — —")
+    lines.append("–––––––")
 
     # ——— NOTION КОНТЕКСТ ———
     if last_note:
@@ -241,7 +241,7 @@ def build_morning_briefing() -> str:
         lines.append(f"📓 *Последняя заметка:*")
         lines.append(f"  {last_note}")
         lines.append("")
-        lines.append("— — — — — — — — — —")
+        lines.append("–––––––")
 
     # ——— AI ИНСАЙТ ———
     insight = generate_personal_insight(urgent_tasks or all_tasks[:5], events)
@@ -271,7 +271,7 @@ def build_evening_briefing() -> str:
     lines.append(f"_{day_name}, {now.strftime('%d.%m.%Y')}_")
     lines.append("")
 
-    lines.append("— — — — — — — — — —")
+    lines.append("–––––––")
     lines.append("")
 
     # Что горело
@@ -290,7 +290,7 @@ def build_evening_briefing() -> str:
                     tags_str = f" *[{', '.join(safe_tags)}]*"
                 lines.append(f"  🔴{tags_str} {safe_name}")
                 lines.append("")
-            lines.append("— — — — — — — — — —")
+            lines.append("–––––––")
             lines.append("")
 
         if today:
@@ -304,12 +304,12 @@ def build_evening_briefing() -> str:
                     tags_str = f" *[{', '.join(safe_tags)}]*"
                 lines.append(f"  🟡{tags_str} {safe_name}")
                 lines.append("")
-            lines.append("— — — — — — — — — —")
+            lines.append("–––––––")
             lines.append("")
 
     lines.append(f"📋 Всего активных задач: *{len(all_tasks)}*")
     lines.append("")
-    lines.append("— — — — — — — — — —")
+    lines.append("–––––––")
     lines.append("")
     lines.append("🛌 *Отдыхай, завтра новый день!*")
 

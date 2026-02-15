@@ -120,12 +120,19 @@ def format_tasks_message(tasks: list) -> str:
             by_status[status] = []
         by_status[status].append(t)
     
-    lines = [f"📋 *ClickUp — Твои задачи ({len(tasks)})*\n"]
+    lines = [f"📋 *ClickUp — Твои задачи ({len(tasks)})*"]
     
-    for status, status_tasks in by_status.items():
+    for i, (status, status_tasks) in enumerate(by_status.items()):
         emoji = STATUS_EMOJI.get(status.lower(), "📌")
         safe_status = _escape_markdown(status.upper())
-        lines.append(f"\n{emoji} *{safe_status}*")
+        
+        if i > 0:
+            lines.append("")
+            lines.append("–––––––")
+        
+        lines.append("")
+        lines.append(f"{emoji} *{safe_status}*")
+        lines.append("")
         
         for t in status_tasks:
             p_emoji = PRIORITY_EMOJI.get(t['priority'], '⚪️')
@@ -152,6 +159,7 @@ def format_tasks_message(tasks: list) -> str:
                     due_str = f" 📅 {t['due_date'].strftime('%d.%m')}"
             
             lines.append(f"  {p_emoji}{tags_str} {safe_name}{due_str}")
+            lines.append("")
     
     return "\n".join(lines)
 
