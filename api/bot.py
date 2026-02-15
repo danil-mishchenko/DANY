@@ -51,7 +51,10 @@ try:
         replace_page_content,
         rename_page,
         get_user_settings,
-        set_user_settings
+        set_user_settings,
+        get_hidden_tasks,
+        set_hidden_tasks,
+        add_hidden_task
     )
     from services.calendar import (
         create_google_calendar_event,
@@ -275,6 +278,34 @@ class handler(BaseHTTPRequestHandler):
                 
                 elif callback_data == 'clickup_refresh':
                     # Обновляем список задач ClickUp
+                    hidden_ids = get_hidden_tasks(user_id)
+                    tasks = get_my_tasks()
+                    msg = format_tasks_message(tasks, hidden_ids=hidden_ids)
+                    buttons = [[{"text": "🔄 Обновить", "callback_data": "clickup_refresh"}]]
+                    if hidden_ids:
+                        buttons.append([{"text": f"👁 Показать скрытые ({len(hidden_ids)})", "callback_data": "unhide_all"}])
+                    if tasks:
+                        buttons.append([{"text": "🌐 Открыть ClickUp", "url": "https://app.clickup.com"}])
+                    edit_telegram_message(chat_id, callback_query['message']['message_id'], msg, inline_buttons=buttons)
+                
+                elif callback_data.startswith('hide_task_'):
+                    task_id = callback_data.replace('hide_task_', '')
+                    add_hidden_task(user_id, task_id)
+                    answer_callback_query(callback_query['id'], "👁 Задача скрыта")
+                    # Обновляем список
+                    hidden_ids = get_hidden_tasks(user_id)
+                    tasks = get_my_tasks()
+                    msg = format_tasks_message(tasks, hidden_ids=hidden_ids)
+                    buttons = [[{"text": "🔄 Обновить", "callback_data": "clickup_refresh"}]]
+                    if hidden_ids:
+                        buttons.append([{"text": f"👁 Показать скрытые ({len(hidden_ids)})", "callback_data": "unhide_all"}])
+                    if tasks:
+                        buttons.append([{"text": "🌐 Открыть ClickUp", "url": "https://app.clickup.com"}])
+                    edit_telegram_message(chat_id, callback_query['message']['message_id'], msg, inline_buttons=buttons)
+                
+                elif callback_data == 'unhide_all':
+                    set_hidden_tasks(user_id, [])
+                    answer_callback_query(callback_query['id'], "✅ Все задачи показаны")
                     tasks = get_my_tasks()
                     msg = format_tasks_message(tasks)
                     buttons = [[{"text": "🔄 Обновить", "callback_data": "clickup_refresh"}]]
@@ -379,12 +410,22 @@ class handler(BaseHTTPRequestHandler):
                 return
             elif text == "📋 ClickUp":
                 # Показываем задачи из ClickUp
+                hidden_ids = get_hidden_tasks(user_id)
                 tasks = get_my_tasks()
-                msg = format_tasks_message(tasks)
+                msg = format_tasks_message(tasks, hidden_ids=hidden_ids)
+                
+                # Фильтруем для кнопок скрытия
+                visible_tasks = [t for t in tasks if t.get('id', '') not in (hidden_ids or [])]
                 
                 # Добавляем кнопки под сообщение
                 buttons = [[{"text": "🔄 Обновить", "callback_data": "clickup_refresh"}]]
-                if tasks:
+                if hidden_ids:
+                    buttons.append([{"text": f"👁 Показать скрытые ({len(hidden_ids)})", "callback_data": "unhide_all"}])
+                if visible_tasks:
+                    # Кнопки скрытия для каждой задачи (макс 5)
+                    for t in visible_tasks[:5]:
+                        short_name = t['name'][:25] + ('...' if len(t['name']) > 25 else '')
+                        buttons.append([{"text": f"👁‍🗨 Скрыть: {short_name}", "callback_data": f"hide_task_{t['id']}"}])
                     buttons.append([{"text": "🌐 Открыть ClickUp", "url": "https://app.clickup.com"}])
                 
                 send_message_with_buttons(chat_id, msg, buttons)
@@ -443,7 +484,7 @@ class handler(BaseHTTPRequestHandler):
                 send_telegram_message(chat_id, "⏳ Собираю утренний брифинг...")
                 try:
                     briefing_msg = build_morning_briefing()
-                    send_telegram_message(chat_id, briefing_msg, show_keyboard=True)
+                    send_telegram_message(chat_id, briefing_msg, use_html=True, show_keyboard=True)
                 except Exception as e:
                     send_telegram_message(chat_id, f"❌ Ошибка брифинга: {e}", show_keyboard=True)
                 self.send_response(200)
@@ -454,7 +495,7 @@ class handler(BaseHTTPRequestHandler):
                 send_telegram_message(chat_id, "⏳ Собираю вечерний отчёт...")
                 try:
                     evening_msg = build_evening_briefing()
-                    send_telegram_message(chat_id, evening_msg, show_keyboard=True)
+                    send_telegram_message(chat_id, evening_msg, use_html=True, show_keyboard=True)
                 except Exception as e:
                     send_telegram_message(chat_id, f"❌ Ошибка: {e}", show_keyboard=True)
                 self.send_response(200)

@@ -7,9 +7,52 @@ from datetime import datetime, timedelta
 from utils.config import (
     GOOGLE_CREDENTIALS_JSON, GOOGLE_CALENDAR_ID,
     USER_TIMEZONE, OPENAI_API_KEY, DEFAULT_TIMEOUT,
-    NOTION_TOKEN, NOTION_DATABASE_ID
+    NOTION_TOKEN, NOTION_DATABASE_ID, ALLOWED_TELEGRAM_ID
 )
 from services.clickup import get_my_tasks, _escape_markdown, PRIORITY_EMOJI
+from services.notion import get_hidden_tasks, get_user_xp, set_user_xp
+
+
+# === RPG XP СИСТЕМА ===
+XP_PER_PRIORITY = {"urgent": 50, "high": 30, "normal": 15, "low": 10, "none": 5}
+
+RPG_LEVELS = [
+    (0, "🐀 Крестьянин"),
+    (50, "🗡️ Оруженосец"),
+    (150, "⚔️ Пехотинец"),
+    (300, "🏹 Лучник"),
+    (500, "🛡️ Рыцарь"),
+    (750, "⚜️ Паладин"),
+    (1050, "🐴 Конный Рыцарь"),
+    (1400, "🏰 Комендант Крепости"),
+    (1800, "🦁 Рыцарь Ордена"),
+    (2300, "📜 Магистр"),
+    (2900, "🗺️ Полководец"),
+    (3600, "👑 Барон"),
+    (4400, "🏛️ Граф"),
+    (5300, "🦅 Герцог"),
+    (6300, "⚔️👑 Великий Герцог"),
+    (7500, "🔱 Принц"),
+    (9000, "👸 Регент"),
+    (11000, "🏰👑 Король"),
+    (13500, "🌟 Император"),
+    (16500, "🐉 Легенда"),
+]
+
+
+def get_rpg_level(xp: int) -> tuple:
+    """Возвращает (название уровня, xp до следующего)."""
+    current_level = RPG_LEVELS[0]
+    next_threshold = RPG_LEVELS[1][0] if len(RPG_LEVELS) > 1 else None
+    
+    for i, (threshold, name) in enumerate(RPG_LEVELS):
+        if xp >= threshold:
+            current_level = (threshold, name)
+            next_threshold = RPG_LEVELS[i + 1][0] if i + 1 < len(RPG_LEVELS) else None
+        else:
+            break
+    
+    return current_level[1], next_threshold
 
 
 def get_today_events() -> list:
@@ -83,7 +126,6 @@ def get_last_notion_note() -> str:
         if results:
             page = results[0]
             props = page.get('properties', {})
-            # Ищем заголовок
             for prop in props.values():
                 if prop.get('type') == 'title':
                     title_arr = prop.get('title', [])
@@ -95,9 +137,11 @@ def get_last_notion_note() -> str:
         return ""
 
 
-def get_urgent_tasks() -> list:
-    """Получает задачи с дедлайном сегодня или просрочено, сортировка по дедлайну."""
+def get_urgent_tasks(hidden_ids: list = None) -> list:
+    """Получает задачи с дедлайном сегодня или просрочено."""
     all_tasks = get_my_tasks()
+    if hidden_ids:
+        all_tasks = [t for t in all_tasks if t.get('id', '') not in hidden_ids]
     now = datetime.now()
 
     urgent = []
@@ -108,19 +152,18 @@ def get_urgent_tasks() -> list:
                 t['_urgency'] = diff
                 urgent.append(t)
 
-    # Сортируем по дедлайну (самые просроченные первые)
     urgent.sort(key=lambda t: t['_urgency'])
     return urgent[:5]
 
 
 def generate_personal_insight(tasks: list, events: list) -> str:
-    """Генерирует персонализированный инсайт на основе задач и событий."""
+    """Генерирует персонализированный инсайт."""
     if not OPENAI_API_KEY:
         return "Фокус на главном, остальное подождёт. Ты справишься!"
 
     tasks_context = "\n".join([
         f"- {t['name']} (бренд: {', '.join(t.get('tags', []))}, приоритет: {t['priority']}, "
-        f"{'просрочено' if t.get('_urgency', 0) < 0 else 'дедлайн сегодня'})"
+        f"{'просрочено ' + str(abs(t.get('_urgency', 0))) + ' дн.' if t.get('_urgency', 0) < 0 else 'дедлайн сегодня'})"
         for t in tasks
     ]) or "Нет горящих задач."
 
@@ -150,7 +193,8 @@ def generate_personal_insight(tasks: list, events: list) -> str:
 - Тон: энергичный, дружелюбный, как лучший друг-коуч
 - Пиши на русском
 - НЕ используй кавычки вокруг текста, НЕ начинай с "Доброе утро"
-- НЕ используй символы Markdown (* _ ` [ ] ( ))"""
+- НЕ используй символы Markdown (* _ ` [ ] ( ))
+- НЕ используй HTML теги"""
 
         payload = {
             "model": "gpt-4o-mini",
@@ -169,15 +213,25 @@ def generate_personal_insight(tasks: list, events: list) -> str:
 
 
 def build_morning_briefing() -> str:
-    """Собирает полное сообщение утреннего брифинга."""
+    """Собирает полное сообщение утреннего брифинга (HTML формат)."""
     import pytz
     tz = pytz.timezone(USER_TIMEZONE)
     now = datetime.now(tz)
 
+    # Данные
+    user_id = ALLOWED_TELEGRAM_ID or ""
+    hidden_ids = get_hidden_tasks(user_id) if user_id else []
     events = get_today_events()
     all_tasks = get_my_tasks()
-    urgent_tasks = get_urgent_tasks()
+    if hidden_ids:
+        all_tasks = [t for t in all_tasks if t.get('id', '') not in hidden_ids]
+    urgent_tasks = get_urgent_tasks(hidden_ids)
     last_note = get_last_notion_note()
+
+    # XP
+    xp_data = get_user_xp(user_id) if user_id else {'xp': 0, 'level': 1}
+    current_xp = xp_data.get('xp', 0)
+    rpg_title, next_threshold = get_rpg_level(current_xp)
 
     # Header
     weekdays = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
@@ -186,89 +240,105 @@ def build_morning_briefing() -> str:
     day_of_year = now.timetuple().tm_yday
 
     lines = []
-    lines.append(f"🌅 *Погнали, Шеф!*")
-    lines.append(f"_{day_name}, {date_str}  •  День #{day_of_year}_")
+    lines.append(f"<b>🌅 Погнали, Шеф!</b>")
+    lines.append(f"<i>{day_name}, {date_str}  •  День #{day_of_year}</i>")
+    xp_line = f"<i>{rpg_title}  •  {current_xp} XP</i>"
+    if next_threshold:
+        xp_line += f" <i>(до след: {next_threshold - current_xp})</i>"
+    lines.append(xp_line)
     lines.append("")
 
-    # ——— КАЛЕНДАРЬ ———
+    # КАЛЕНДАРЬ
     if events:
-        lines.append(f"📅 *Сегодня в расписании:*")
+        lines.append(f"<b>📅 Сегодня в расписании:</b>")
         lines.append("")
         for e in events:
-            time_prefix = f"🕒 *{e['time']}*" if e['time'] else "📌"
-            safe_title = _escape_markdown(e['title'])
-            lines.append(f"{time_prefix} — {safe_title}")
+            time_prefix = f"🕒 <b>{e['time']}</b>" if e['time'] else "📌"
+            lines.append(f"{time_prefix} — {e['title']}")
             lines.append("")
     else:
-        lines.append("📅 *Расписание чистое* — свободный день для фокуса!")
+        lines.append("<b>📅 Расписание чистое</b> — свободный день для фокуса!")
         lines.append("")
 
     lines.append("–––––––")
 
-    # ——— ГОРЯЩИЕ ЗАДАЧИ ———
+    # ГОРЯЩИЕ ЗАДАЧИ
     if urgent_tasks:
         lines.append("")
-        lines.append(f"🔥 *Горящие миссии ({len(urgent_tasks)}):*")
+        lines.append(f"<b>🔥 Горящие миссии ({len(urgent_tasks)}):</b>")
         lines.append("")
 
         for t in urgent_tasks:
             p_emoji = PRIORITY_EMOJI.get(t['priority'], '⚪️')
-            safe_name = _escape_markdown(t['name'])
+            name = t['name']
 
             tags_str = ""
             if t.get('tags'):
-                safe_tags = [_escape_markdown(tag) for tag in t['tags']]
-                tags_str = f" *[{', '.join(safe_tags)}]*"
+                tags_str = f" <b>[{', '.join(t['tags'])}]</b>"
 
             overdue = t.get('_urgency', 0) < 0
-            marker = "⚠️ просрочено!" if overdue else "🔥 сегодня"
+            if overdue:
+                days = abs(t['_urgency'])
+                marker = f"⚠️ просрочено {days} дн."
+            else:
+                marker = "🔥 сегодня"
 
-            lines.append(f"{p_emoji}{tags_str} {safe_name}")
+            lines.append(f"{p_emoji}{tags_str} {name}")
             lines.append(f"     {marker}")
             lines.append("")
 
-    # ——— ВСЕ ЗАДАЧИ ———
+    # ВСЕ ЗАДАЧИ
     remaining = len(all_tasks) - len(urgent_tasks)
     if remaining > 0:
-        lines.append(f"📋 И ещё *{remaining}* задач в работе")
+        lines.append(f"📋 И ещё <b>{remaining}</b> задач в работе")
         lines.append("")
 
     lines.append("–––––––")
 
-    # ——— NOTION КОНТЕКСТ ———
+    # NOTION КОНТЕКСТ
     if last_note:
         lines.append("")
-        lines.append(f"📓 *Последняя заметка:*")
+        lines.append(f"<b>📓 Последняя заметка:</b>")
         lines.append(f"  {last_note}")
         lines.append("")
         lines.append("–––––––")
 
-    # ——— AI ИНСАЙТ ———
+    # AI ИНСАЙТ (blockquote)
     insight = generate_personal_insight(urgent_tasks or all_tasks[:5], events)
     lines.append("")
-    lines.append(f"💡 *Инсайт дня:*")
-    lines.append(f"{insight}")
+    lines.append(f"<b>💡 Инсайт дня:</b>")
+    lines.append(f"<blockquote>{insight}</blockquote>")
     lines.append("")
-    lines.append("🚀 *Зажги сегодня!*")
+    lines.append("<b>🚀 Зажги сегодня!</b>")
 
     return "\n".join(lines)
 
 
 def build_evening_briefing() -> str:
-    """Собирает вечерний брифинг — итоги дня."""
+    """Собирает вечерний брифинг — итоги дня (HTML формат)."""
     import pytz
     tz = pytz.timezone(USER_TIMEZONE)
     now = datetime.now(tz)
 
+    user_id = ALLOWED_TELEGRAM_ID or ""
+    hidden_ids = get_hidden_tasks(user_id) if user_id else []
     all_tasks = get_my_tasks()
-    urgent_tasks = get_urgent_tasks()
+    if hidden_ids:
+        all_tasks = [t for t in all_tasks if t.get('id', '') not in hidden_ids]
+    urgent_tasks = get_urgent_tasks(hidden_ids)
+
+    # XP
+    xp_data = get_user_xp(user_id) if user_id else {'xp': 0, 'level': 1}
+    current_xp = xp_data.get('xp', 0)
+    rpg_title, _ = get_rpg_level(current_xp)
 
     weekdays = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
     day_name = weekdays[now.weekday()]
 
     lines = []
-    lines.append("🌙 *Итоги дня, Шеф*")
-    lines.append(f"_{day_name}, {now.strftime('%d.%m.%Y')}_")
+    lines.append("<b>🌙 Итоги дня, Шеф</b>")
+    lines.append(f"<i>{day_name}, {now.strftime('%d.%m.%Y')}</i>")
+    lines.append(f"<i>{rpg_title}  •  {current_xp} XP</i>")
     lines.append("")
 
     lines.append("–––––––")
@@ -280,37 +350,34 @@ def build_evening_briefing() -> str:
         today = [t for t in urgent_tasks if t.get('_urgency', 0) == 0]
 
         if overdue:
-            lines.append(f"⚠️ *Просрочено ({len(overdue)}):*")
+            lines.append(f"<b>⚠️ Просрочено ({len(overdue)}):</b>")
             lines.append("")
             for t in overdue:
-                safe_name = _escape_markdown(t['name'])
                 tags_str = ""
                 if t.get('tags'):
-                    safe_tags = [_escape_markdown(tag) for tag in t['tags']]
-                    tags_str = f" *[{', '.join(safe_tags)}]*"
-                lines.append(f"  🔴{tags_str} {safe_name}")
+                    tags_str = f" <b>[{', '.join(t['tags'])}]</b>"
+                days = abs(t.get('_urgency', 0))
+                lines.append(f"  🔴{tags_str} {t['name']} ({days} дн.)")
                 lines.append("")
             lines.append("–––––––")
             lines.append("")
 
         if today:
-            lines.append(f"📌 *Было на сегодня ({len(today)}):*")
+            lines.append(f"<b>📌 Было на сегодня ({len(today)}):</b>")
             lines.append("")
             for t in today:
-                safe_name = _escape_markdown(t['name'])
                 tags_str = ""
                 if t.get('tags'):
-                    safe_tags = [_escape_markdown(tag) for tag in t['tags']]
-                    tags_str = f" *[{', '.join(safe_tags)}]*"
-                lines.append(f"  🟡{tags_str} {safe_name}")
+                    tags_str = f" <b>[{', '.join(t['tags'])}]</b>"
+                lines.append(f"  🟡{tags_str} {t['name']}")
                 lines.append("")
             lines.append("–––––––")
             lines.append("")
 
-    lines.append(f"📋 Всего активных задач: *{len(all_tasks)}*")
+    lines.append(f"📋 Всего активных задач: <b>{len(all_tasks)}</b>")
     lines.append("")
     lines.append("–––––––")
     lines.append("")
-    lines.append("🛌 *Отдыхай, завтра новый день!*")
+    lines.append("<b>🛌 Отдыхай, завтра новый день!</b>")
 
     return "\n".join(lines)

@@ -480,3 +480,136 @@ def set_user_settings(user_id: str, reminder_minutes: int):
         'GCalEventID': {'rich_text': [{'type': 'text', 'text': {'content': str(reminder_minutes)}}]}
     }
     log_last_action(properties=properties)
+
+
+def get_hidden_tasks(user_id: str) -> list:
+    """Получает список скрытых задач ClickUp из настроек."""
+    log_db_id = NOTION_LOG_DB_ID
+    if not log_db_id:
+        return []
+    
+    payload = {
+        "filter": {"and": [
+            {"property": "UserID", "rich_text": {"equals": user_id}},
+            {"property": "State", "select": {"equals": "hidden_tasks"}}
+        ]},
+        "page_size": 1
+    }
+    query_url = f"https://api.notion.com/v1/databases/{log_db_id}/query"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    
+    try:
+        response = requests.post(query_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
+        results = response.json().get('results', [])
+        if results:
+            text_arr = results[0]['properties'].get('GCalEventID', {}).get('rich_text', [])
+            if text_arr:
+                import json as json_mod
+                return json_mod.loads(text_arr[0]['text']['content'])
+    except Exception as e:
+        print(f"Error getting hidden tasks: {e}")
+    return []
+
+
+def set_hidden_tasks(user_id: str, task_ids: list):
+    """Сохраняет список скрытых задач."""
+    import json as json_mod
+    log_db_id = NOTION_LOG_DB_ID
+    if not log_db_id:
+        return
+    
+    # Удаляем старые
+    payload = {
+        "filter": {"and": [
+            {"property": "UserID", "rich_text": {"equals": user_id}},
+            {"property": "State", "select": {"equals": "hidden_tasks"}}
+        ]}
+    }
+    query_url = f"https://api.notion.com/v1/databases/{log_db_id}/query"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    response = requests.post(query_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
+    for result in response.json().get('results', []):
+        delete_notion_page(result['id'])
+    
+    # Создаём новые
+    properties = {
+        'Name': {'title': [{'type': 'text', 'text': {'content': f"Hidden tasks for {user_id}"}}]},
+        'UserID': {'rich_text': [{'type': 'text', 'text': {'content': user_id}}]},
+        'State': {'select': {'name': 'hidden_tasks'}},
+        'GCalEventID': {'rich_text': [{'type': 'text', 'text': {'content': json_mod.dumps(task_ids)}}]}
+    }
+    log_last_action(properties=properties)
+
+
+def add_hidden_task(user_id: str, task_id: str):
+    """Добавляет задачу в скрытые."""
+    hidden = get_hidden_tasks(user_id)
+    if task_id not in hidden:
+        hidden.append(task_id)
+        set_hidden_tasks(user_id, hidden)
+
+
+def remove_hidden_task(user_id: str, task_id: str):
+    """Убирает задачу из скрытых."""
+    hidden = get_hidden_tasks(user_id)
+    if task_id in hidden:
+        hidden.remove(task_id)
+        set_hidden_tasks(user_id, hidden)
+
+
+def get_user_xp(user_id: str) -> dict:
+    """Получает XP пользователя."""
+    log_db_id = NOTION_LOG_DB_ID
+    if not log_db_id:
+        return {'xp': 0, 'level': 1}
+    
+    payload = {
+        "filter": {"and": [
+            {"property": "UserID", "rich_text": {"equals": user_id}},
+            {"property": "State", "select": {"equals": "user_xp"}}
+        ]},
+        "page_size": 1
+    }
+    query_url = f"https://api.notion.com/v1/databases/{log_db_id}/query"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    
+    try:
+        response = requests.post(query_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
+        results = response.json().get('results', [])
+        if results:
+            text_arr = results[0]['properties'].get('GCalEventID', {}).get('rich_text', [])
+            if text_arr:
+                import json as json_mod
+                return json_mod.loads(text_arr[0]['text']['content'])
+    except Exception as e:
+        print(f"Error getting XP: {e}")
+    return {'xp': 0, 'level': 1}
+
+
+def set_user_xp(user_id: str, xp_data: dict):
+    """Сохраняет XP пользователя."""
+    import json as json_mod
+    log_db_id = NOTION_LOG_DB_ID
+    if not log_db_id:
+        return
+    
+    payload = {
+        "filter": {"and": [
+            {"property": "UserID", "rich_text": {"equals": user_id}},
+            {"property": "State", "select": {"equals": "user_xp"}}
+        ]}
+    }
+    query_url = f"https://api.notion.com/v1/databases/{log_db_id}/query"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    response = requests.post(query_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
+    for result in response.json().get('results', []):
+        delete_notion_page(result['id'])
+    
+    properties = {
+        'Name': {'title': [{'type': 'text', 'text': {'content': f"XP for {user_id}"}}]},
+        'UserID': {'rich_text': [{'type': 'text', 'text': {'content': user_id}}]},
+        'State': {'select': {'name': 'user_xp'}},
+        'GCalEventID': {'rich_text': [{'type': 'text', 'text': {'content': json_mod.dumps(xp_data)}}]}
+    }
+    log_last_action(properties=properties)
+

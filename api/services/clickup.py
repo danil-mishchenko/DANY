@@ -103,8 +103,11 @@ def _escape_markdown(text: str) -> str:
     return text
 
 
-def format_tasks_message(tasks: list) -> str:
+def format_tasks_message(tasks: list, hidden_ids: list = None) -> str:
     """Форматирует список задач в красивое Telegram сообщение."""
+    if hidden_ids:
+        tasks = [t for t in tasks if t.get('id', '') not in hidden_ids]
+    
     if not tasks:
         return "📋 *ClickUp*\n\nНет активных задач. Отлично! 🎉"
     
@@ -150,7 +153,7 @@ def format_tasks_message(tasks: list) -> str:
                 now = datetime.now()
                 diff = (t['due_date'].date() - now.date()).days
                 if diff < 0:
-                    due_str = " ⚠️ просрочено"
+                    due_str = f" ⚠️ просрочено {abs(diff)} дн."
                 elif diff == 0:
                     due_str = " 🔥 сегодня"
                 elif diff == 1:
