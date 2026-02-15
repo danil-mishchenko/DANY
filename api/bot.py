@@ -417,7 +417,9 @@ class handler(BaseHTTPRequestHandler):
             elif text == "📋 ClickUp":
                 # Показываем задачи из ClickUp
                 hidden_ids = get_hidden_tasks(user_id)
+                print(f"CLICKUP BUTTON: user_id={user_id}, hidden_ids={hidden_ids}")
                 tasks = get_my_tasks()
+                print(f"CLICKUP BUTTON: total tasks={len(tasks)}, task_ids={[t.get('id') for t in tasks[:5]]}")
                 msg = format_tasks_message(tasks, hidden_ids=hidden_ids)
                 
                 # Компактные кнопки

@@ -486,6 +486,7 @@ def get_hidden_tasks(user_id: str) -> list:
     """Получает список скрытых задач ClickUp из настроек."""
     log_db_id = NOTION_LOG_DB_ID
     if not log_db_id:
+        print("HIDDEN_TASKS: NOTION_LOG_DB_ID not set")
         return []
     
     payload = {
@@ -500,14 +501,27 @@ def get_hidden_tasks(user_id: str) -> list:
     
     try:
         response = requests.post(query_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
-        results = response.json().get('results', [])
+        resp_json = response.json()
+        print(f"HIDDEN_TASKS GET: status={response.status_code}, results_count={len(resp_json.get('results', []))}")
+        
+        if response.status_code != 200:
+            print(f"HIDDEN_TASKS GET ERROR: {resp_json}")
+            return []
+        
+        results = resp_json.get('results', [])
         if results:
             text_arr = results[0]['properties'].get('GCalEventID', {}).get('rich_text', [])
             if text_arr:
                 import json as json_mod
-                return json_mod.loads(text_arr[0]['text']['content'])
+                task_list = json_mod.loads(text_arr[0]['text']['content'])
+                print(f"HIDDEN_TASKS GET: found {len(task_list)} hidden tasks: {task_list}")
+                return task_list
+            else:
+                print("HIDDEN_TASKS GET: found record but GCalEventID is empty")
+        else:
+            print(f"HIDDEN_TASKS GET: no records found for user {user_id}")
     except Exception as e:
-        print(f"Error getting hidden tasks: {e}")
+        print(f"HIDDEN_TASKS GET ERROR: {e}")
     return []
 
 
@@ -516,7 +530,11 @@ def set_hidden_tasks(user_id: str, task_ids: list):
     import json as json_mod
     log_db_id = NOTION_LOG_DB_ID
     if not log_db_id:
+        print("HIDDEN_TASKS SET: NOTION_LOG_DB_ID not set")
         return
+    
+    query_url = f"https://api.notion.com/v1/databases/{log_db_id}/query"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
     
     # Удаляем старые
     payload = {
@@ -525,28 +543,35 @@ def set_hidden_tasks(user_id: str, task_ids: list):
             {"property": "State", "select": {"equals": "hidden_tasks"}}
         ]}
     }
-    query_url = f"https://api.notion.com/v1/databases/{log_db_id}/query"
-    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
     response = requests.post(query_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
-    for result in response.json().get('results', []):
+    old_results = response.json().get('results', [])
+    print(f"HIDDEN_TASKS SET: deleting {len(old_results)} old records")
+    for result in old_results:
         delete_notion_page(result['id'])
     
     # Создаём новые
+    json_content = json_mod.dumps(task_ids)
+    print(f"HIDDEN_TASKS SET: saving {len(task_ids)} tasks: {task_ids}")
     properties = {
         'Name': {'title': [{'type': 'text', 'text': {'content': f"Hidden tasks for {user_id}"}}]},
         'UserID': {'rich_text': [{'type': 'text', 'text': {'content': user_id}}]},
         'State': {'select': {'name': 'hidden_tasks'}},
-        'GCalEventID': {'rich_text': [{'type': 'text', 'text': {'content': json_mod.dumps(task_ids)}}]}
+        'GCalEventID': {'rich_text': [{'type': 'text', 'text': {'content': json_content}}]}
     }
     log_last_action(properties=properties)
+    print(f"HIDDEN_TASKS SET: save completed")
 
 
 def add_hidden_task(user_id: str, task_id: str):
     """Добавляет задачу в скрытые."""
+    print(f"HIDDEN_TASKS ADD: user={user_id}, task={task_id}")
     hidden = get_hidden_tasks(user_id)
     if task_id not in hidden:
         hidden.append(task_id)
         set_hidden_tasks(user_id, hidden)
+        print(f"HIDDEN_TASKS ADD: now {len(hidden)} hidden")
+    else:
+        print(f"HIDDEN_TASKS ADD: task already hidden")
 
 
 def remove_hidden_task(user_id: str, task_id: str):
