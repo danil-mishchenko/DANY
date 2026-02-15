@@ -482,12 +482,11 @@ def set_user_settings(user_id: str, reminder_minutes: int):
     log_last_action(properties=properties)
 
 
-def get_hidden_tasks(user_id: str) -> list:
-    """Получает список скрытых задач ClickUp из настроек."""
+def _find_hidden_tasks_page(user_id: str) -> tuple:
+    """Ищет страницу hidden_tasks, возвращает (page_id, task_list) или (None, [])."""
     log_db_id = NOTION_LOG_DB_ID
     if not log_db_id:
-        print("HIDDEN_TASKS: NOTION_LOG_DB_ID not set")
-        return []
+        return None, []
     
     payload = {
         "filter": {"and": [
@@ -501,65 +500,70 @@ def get_hidden_tasks(user_id: str) -> list:
     
     try:
         response = requests.post(query_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
-        resp_json = response.json()
-        print(f"HIDDEN_TASKS GET: status={response.status_code}, results_count={len(resp_json.get('results', []))}")
-        
         if response.status_code != 200:
-            print(f"HIDDEN_TASKS GET ERROR: {resp_json}")
-            return []
+            print(f"HIDDEN_TASKS FIND: API error {response.status_code}")
+            return None, []
         
-        results = resp_json.get('results', [])
+        results = response.json().get('results', [])
         if results:
+            page_id = results[0]['id']
             text_arr = results[0]['properties'].get('GCalEventID', {}).get('rich_text', [])
             if text_arr:
                 import json as json_mod
                 task_list = json_mod.loads(text_arr[0]['text']['content'])
-                print(f"HIDDEN_TASKS GET: found {len(task_list)} hidden tasks: {task_list}")
-                return task_list
-            else:
-                print("HIDDEN_TASKS GET: found record but GCalEventID is empty")
-        else:
-            print(f"HIDDEN_TASKS GET: no records found for user {user_id}")
+                print(f"HIDDEN_TASKS FIND: page={page_id}, tasks={task_list}")
+                return page_id, task_list
+            print(f"HIDDEN_TASKS FIND: page={page_id}, empty content")
+            return page_id, []
+        print(f"HIDDEN_TASKS FIND: no page for user {user_id}")
     except Exception as e:
-        print(f"HIDDEN_TASKS GET ERROR: {e}")
-    return []
+        print(f"HIDDEN_TASKS FIND ERROR: {e}")
+    return None, []
+
+
+def get_hidden_tasks(user_id: str) -> list:
+    """Получает список скрытых задач ClickUp."""
+    _, task_list = _find_hidden_tasks_page(user_id)
+    return task_list
 
 
 def set_hidden_tasks(user_id: str, task_ids: list):
-    """Сохраняет список скрытых задач."""
+    """Сохраняет список скрытых задач — UPDATE если страница есть, CREATE если нет."""
     import json as json_mod
     log_db_id = NOTION_LOG_DB_ID
     if not log_db_id:
-        print("HIDDEN_TASKS SET: NOTION_LOG_DB_ID not set")
         return
     
-    query_url = f"https://api.notion.com/v1/databases/{log_db_id}/query"
     headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
-    
-    # Удаляем старые
-    payload = {
-        "filter": {"and": [
-            {"property": "UserID", "rich_text": {"equals": user_id}},
-            {"property": "State", "select": {"equals": "hidden_tasks"}}
-        ]}
-    }
-    response = requests.post(query_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
-    old_results = response.json().get('results', [])
-    print(f"HIDDEN_TASKS SET: deleting {len(old_results)} old records")
-    for result in old_results:
-        delete_notion_page(result['id'])
-    
-    # Создаём новые
     json_content = json_mod.dumps(task_ids)
-    print(f"HIDDEN_TASKS SET: saving {len(task_ids)} tasks: {task_ids}")
-    properties = {
-        'Name': {'title': [{'type': 'text', 'text': {'content': f"Hidden tasks for {user_id}"}}]},
-        'UserID': {'rich_text': [{'type': 'text', 'text': {'content': user_id}}]},
-        'State': {'select': {'name': 'hidden_tasks'}},
-        'GCalEventID': {'rich_text': [{'type': 'text', 'text': {'content': json_content}}]}
-    }
-    log_last_action(properties=properties)
-    print(f"HIDDEN_TASKS SET: save completed")
+    
+    page_id, _ = _find_hidden_tasks_page(user_id)
+    
+    if page_id:
+        # UPDATE существующей страницы
+        update_url = f"https://api.notion.com/v1/pages/{page_id}"
+        update_payload = {
+            "properties": {
+                'GCalEventID': {'rich_text': [{'type': 'text', 'text': {'content': json_content}}]}
+            }
+        }
+        try:
+            resp = requests.patch(update_url, headers=headers, json=update_payload, timeout=DEFAULT_TIMEOUT)
+            print(f"HIDDEN_TASKS UPDATE: status={resp.status_code}, tasks={task_ids}")
+            if resp.status_code != 200:
+                print(f"HIDDEN_TASKS UPDATE ERROR: {resp.text[:200]}")
+        except Exception as e:
+            print(f"HIDDEN_TASKS UPDATE ERROR: {e}")
+    else:
+        # CREATE новой страницы
+        properties = {
+            'Name': {'title': [{'type': 'text', 'text': {'content': f"Hidden tasks for {user_id}"}}]},
+            'UserID': {'rich_text': [{'type': 'text', 'text': {'content': user_id}}]},
+            'State': {'select': {'name': 'hidden_tasks'}},
+            'GCalEventID': {'rich_text': [{'type': 'text', 'text': {'content': json_content}}]}
+        }
+        log_last_action(properties=properties)
+        print(f"HIDDEN_TASKS CREATE: new page with tasks={task_ids}")
 
 
 def add_hidden_task(user_id: str, task_id: str):
