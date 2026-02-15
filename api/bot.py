@@ -58,7 +58,7 @@ try:
         delete_gcal_event
     )
     from services.clickup import get_my_tasks, format_tasks_message
-    from services.briefing import build_morning_briefing
+    from services.briefing import build_morning_briefing, build_evening_briefing
     from services.ai import (
         transcribe_with_assemblyai,
         process_with_ai,
@@ -446,6 +446,17 @@ class handler(BaseHTTPRequestHandler):
                     send_telegram_message(chat_id, briefing_msg, show_keyboard=True)
                 except Exception as e:
                     send_telegram_message(chat_id, f"❌ Ошибка брифинга: {e}", show_keyboard=True)
+                self.send_response(200)
+                self.end_headers()
+                return
+            
+            elif text == '/evening':
+                send_telegram_message(chat_id, "⏳ Собираю вечерний отчёт...")
+                try:
+                    evening_msg = build_evening_briefing()
+                    send_telegram_message(chat_id, evening_msg, show_keyboard=True)
+                except Exception as e:
+                    send_telegram_message(chat_id, f"❌ Ошибка: {e}", show_keyboard=True)
                 self.send_response(200)
                 self.end_headers()
                 return
