@@ -99,6 +99,7 @@ class handler(BaseHTTPRequestHandler):
             if callback_query:
                 callback_data = callback_query['data']
                 chat_id = callback_query['message']['chat']['id']
+                user_id = str(callback_query['from']['id'])
                 callback_query_id = callback_query['id']
                 answer_callback_query(callback_query_id)
 
@@ -292,15 +293,20 @@ class handler(BaseHTTPRequestHandler):
                     task_id = callback_data.replace('hide_task_', '')
                     add_hidden_task(user_id, task_id)
                     answer_callback_query(callback_query['id'], "👁 Задача скрыта")
-                    # Обновляем список
+                    # Обновляем меню /hide
                     hidden_ids = get_hidden_tasks(user_id)
                     tasks = get_my_tasks()
-                    msg = format_tasks_message(tasks, hidden_ids=hidden_ids)
-                    buttons = [[{"text": "🔄 Обновить", "callback_data": "clickup_refresh"}]]
+                    visible = [t for t in tasks if t.get('id', '') not in hidden_ids]
+                    
+                    buttons = []
+                    for t in visible[:10]:
+                        short_name = t['name'][:30] + ('...' if len(t['name']) > 30 else '')
+                        tags = f"[{', '.join(t.get('tags', []))}] " if t.get('tags') else ""
+                        buttons.append([{"text": f"👁 {tags}{short_name}", "callback_data": f"hide_task_{t['id']}"}])
                     if hidden_ids:
-                        buttons.append([{"text": f"👁 Показать скрытые ({len(hidden_ids)})", "callback_data": "unhide_all"}])
-                    if tasks:
-                        buttons.append([{"text": "🌐 Открыть ClickUp", "url": "https://app.clickup.com"}])
+                        buttons.append([{"text": f"✅ Показать все скрытые ({len(hidden_ids)})", "callback_data": "unhide_all"}])
+                    
+                    msg = f"👁 *Скрыть задачи*\n\nНажми на задачу чтобы скрыть.\nСкрыто сейчас: *{len(hidden_ids)}*"
                     edit_telegram_message(chat_id, callback_query['message']['message_id'], msg, inline_buttons=buttons)
                 
                 elif callback_data == 'unhide_all':
@@ -414,19 +420,11 @@ class handler(BaseHTTPRequestHandler):
                 tasks = get_my_tasks()
                 msg = format_tasks_message(tasks, hidden_ids=hidden_ids)
                 
-                # Фильтруем для кнопок скрытия
-                visible_tasks = [t for t in tasks if t.get('id', '') not in (hidden_ids or [])]
-                
-                # Добавляем кнопки под сообщение
+                # Компактные кнопки
                 buttons = [[{"text": "🔄 Обновить", "callback_data": "clickup_refresh"}]]
                 if hidden_ids:
                     buttons.append([{"text": f"👁 Показать скрытые ({len(hidden_ids)})", "callback_data": "unhide_all"}])
-                if visible_tasks:
-                    # Кнопки скрытия для каждой задачи (макс 5)
-                    for t in visible_tasks[:5]:
-                        short_name = t['name'][:25] + ('...' if len(t['name']) > 25 else '')
-                        buttons.append([{"text": f"👁‍🗨 Скрыть: {short_name}", "callback_data": f"hide_task_{t['id']}"}])
-                    buttons.append([{"text": "🌐 Открыть ClickUp", "url": "https://app.clickup.com"}])
+                buttons.append([{"text": "🌐 Открыть ClickUp", "url": "https://app.clickup.com"}])
                 
                 send_message_with_buttons(chat_id, msg, buttons)
                 self.send_response(200)
@@ -498,6 +496,30 @@ class handler(BaseHTTPRequestHandler):
                     send_telegram_message(chat_id, evening_msg, use_html=True, show_keyboard=True)
                 except Exception as e:
                     send_telegram_message(chat_id, f"❌ Ошибка: {e}", show_keyboard=True)
+                self.send_response(200)
+                self.end_headers()
+                return
+            
+            elif text == '/hide':
+                # Показываем задачи для скрытия
+                hidden_ids = get_hidden_tasks(user_id)
+                tasks = get_my_tasks()
+                visible = [t for t in tasks if t.get('id', '') not in (hidden_ids or [])]
+                
+                if not visible:
+                    send_telegram_message(chat_id, "📋 Нет видимых задач для скрытия.", show_keyboard=True)
+                else:
+                    buttons = []
+                    for t in visible[:10]:
+                        short_name = t['name'][:30] + ('...' if len(t['name']) > 30 else '')
+                        tags = f"[{', '.join(t.get('tags', []))}] " if t.get('tags') else ""
+                        buttons.append([{"text": f"👁 {tags}{short_name}", "callback_data": f"hide_task_{t['id']}"}])
+                    
+                    if hidden_ids:
+                        buttons.append([{"text": f"✅ Показать все скрытые ({len(hidden_ids)})", "callback_data": "unhide_all"}])
+                    
+                    msg = f"👁 *Скрыть задачи*\n\nНажми на задачу чтобы скрыть.\nСкрыто сейчас: *{len(hidden_ids)}*"
+                    send_message_with_buttons(chat_id, msg, buttons)
                 self.send_response(200)
                 self.end_headers()
                 return
