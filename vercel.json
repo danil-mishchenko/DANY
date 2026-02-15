@@ -5,6 +5,10 @@
       "destination": "/api/cron.py"
     },
     {
+      "source": "/api/clickup-webhook",
+      "destination": "/api/clickup_webhook.py"
+    },
+    {
       "source": "/(.*)",
       "destination": "/api/bot.py"
     }

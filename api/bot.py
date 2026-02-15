@@ -502,6 +502,56 @@ class handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             
+            elif text == '/xp':
+                from services.briefing import get_rpg_level
+                from services.notion import get_user_xp
+                xp_data = get_user_xp(user_id)
+                xp = xp_data.get('xp', 0)
+                title, next_t = get_rpg_level(xp)
+                msg = f"<b>⚔️ Твой профиль, Шеф</b>\n\n{title}\n<b>{xp} XP</b>"
+                if next_t:
+                    msg += f"\nДо след. уровня: {next_t - xp} XP"
+                send_telegram_message(chat_id, msg, use_html=True, show_keyboard=True)
+                self.send_response(200)
+                self.end_headers()
+                return
+            
+            elif text == '/register_webhook':
+                import requests as req
+                from utils.config import CLICKUP_API_TOKEN, CLICKUP_TEAM_ID
+                # Определяем URL webhook
+                vercel_url = os.environ.get('VERCEL_URL', '')
+                if not vercel_url:
+                    send_telegram_message(chat_id, "❌ VERCEL_URL не установлен", show_keyboard=True)
+                    self.send_response(200)
+                    self.end_headers()
+                    return
+                
+                webhook_url = f"https://{vercel_url}/api/clickup-webhook"
+                headers = {"Authorization": CLICKUP_API_TOKEN, "Content-Type": "application/json"}
+                payload = {
+                    "endpoint": webhook_url,
+                    "events": ["taskStatusUpdated"]
+                }
+                
+                try:
+                    resp = req.post(
+                        f"https://api.clickup.com/api/v2/team/{CLICKUP_TEAM_ID}/webhook",
+                        headers=headers,
+                        json=payload,
+                        timeout=10
+                    )
+                    if resp.status_code == 200:
+                        wh_id = resp.json().get('id', '?')
+                        send_telegram_message(chat_id, f"✅ Webhook зарегистрирован!\nID: `{wh_id}`\nURL: {webhook_url}", show_keyboard=True)
+                    else:
+                        send_telegram_message(chat_id, f"❌ Ошибка: {resp.status_code}\n{resp.text[:200]}", show_keyboard=True)
+                except Exception as e:
+                    send_telegram_message(chat_id, f"❌ Ошибка: {e}", show_keyboard=True)
+                self.send_response(200)
+                self.end_headers()
+                return
+            
             elif text == '/notes' or text == '📝 Заметки':
                 send_telegram_message(chat_id, "🔎 Загружаю последние заметки...")
                 latest_notes = get_latest_notes(5)

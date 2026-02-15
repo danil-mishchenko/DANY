@@ -46,7 +46,7 @@ class handler(BaseHTTPRequestHandler):
                     try:
                         from services.briefing import build_morning_briefing
                         briefing_msg = build_morning_briefing()
-                        send_telegram_message(int(ALLOWED_TELEGRAM_ID), briefing_msg)
+                        send_telegram_message(int(ALLOWED_TELEGRAM_ID), briefing_msg, use_html=True)
                         print(f"Morning briefing sent at {now_local.strftime('%H:%M')}")
                     except Exception as e:
                         import traceback as tb
@@ -56,7 +56,7 @@ class handler(BaseHTTPRequestHandler):
                     try:
                         from services.briefing import build_evening_briefing
                         briefing_msg = build_evening_briefing()
-                        send_telegram_message(int(ALLOWED_TELEGRAM_ID), briefing_msg)
+                        send_telegram_message(int(ALLOWED_TELEGRAM_ID), briefing_msg, use_html=True)
                         print(f"Evening briefing sent at {now_local.strftime('%H:%M')}")
                     except Exception as e:
                         import traceback as tb
