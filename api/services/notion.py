@@ -415,109 +415,201 @@ def get_user_state(user_id: str):
     return state_details
 
 
-def _get_settings_page(user_id: str) -> tuple:
-    """Находит страницу настроек и возвращает (page_id, settings_dict).
+
+# === UNIFIED SETTINGS STORAGE ===
+# Хранит ВСЕ настройки (reminder, hidden_tasks, XP) в ОДНОЙ Notion странице
+# в основной БД заметок. Использует GET /pages/{id} (всегда консистентно),
+# а НЕ database query (eventual consistency).
+
+_SETTINGS_PAGE_TITLE = "⚙️ Bot Settings"
+_settings_page_id_cache = None  # кеш page_id в рамках одного запроса
+
+
+def _find_settings_page_id(user_id: str) -> str:
+    """Ищет страницу настроек в основной БД заметок по названию.
     
-    Все данные хранятся в одной странице (State=settings) как JSON в GCalEventID.
-    Backward compatible: если старый формат (просто число) — мигрирует автоматически.
+    Возвращает page_id или None.
     """
-    import json as json_mod
-    log_db_id = NOTION_LOG_DB_ID
-    if not log_db_id:
-        return None, {}
+    global _settings_page_id_cache
+    if _settings_page_id_cache:
+        return _settings_page_id_cache
     
+    db_id = NOTION_DATABASE_ID
+    if not db_id:
+        return None
+    
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    
+    # Поиск по названию в основной БД
     payload = {
-        "filter": {"and": [
-            {"property": "UserID", "rich_text": {"equals": user_id}},
-            {"property": "State", "select": {"equals": "settings"}}
-        ]},
+        "filter": {
+            "property": "Name",
+            "title": {"equals": _SETTINGS_PAGE_TITLE}
+        },
         "page_size": 1
     }
-    query_url = f"https://api.notion.com/v1/databases/{log_db_id}/query"
-    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    query_url = f"https://api.notion.com/v1/databases/{db_id}/query"
     
     try:
         response = requests.post(query_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
         results = response.json().get('results', [])
-        
-        if not results:
-            print(f"SETTINGS: no page for user {user_id}")
-            return None, {}
-        
-        page_id = results[0]['id']
-        text_arr = results[0]['properties'].get('GCalEventID', {}).get('rich_text', [])
-        
-        if text_arr:
-            raw = text_arr[0]['text']['content']
-            # Backward compatibility: старый формат — просто число
-            try:
-                val = json_mod.loads(raw)
-                if isinstance(val, dict):
-                    return page_id, val
-            except (json_mod.JSONDecodeError, ValueError):
-                pass
-            # Старый формат — число как строка
-            try:
-                minutes = int(raw)
-                return page_id, {'reminder_minutes': minutes}
-            except ValueError:
-                pass
-        
-        return page_id, {}
+        if results:
+            _settings_page_id_cache = results[0]['id']
+            return _settings_page_id_cache
     except Exception as e:
-        print(f"SETTINGS ERROR: {e}")
-        return None, {}
+        print(f"SETTINGS FIND ERROR: {e}")
+    
+    return None
 
 
-def _save_settings(user_id: str, settings: dict):
-    """Сохраняет настройки — UPDATE если страница есть, CREATE если нет."""
+def _create_settings_page(user_id: str, settings: dict) -> str:
+    """Создаёт страницу настроек в основной БД и возвращает page_id."""
     import json as json_mod
-    log_db_id = NOTION_LOG_DB_ID
-    if not log_db_id:
-        return
+    global _settings_page_id_cache
+    
+    db_id = NOTION_DATABASE_ID
+    if not db_id:
+        return None
+    
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    
+    payload = {
+        "parent": {"database_id": db_id},
+        "properties": {
+            "Name": {"title": [{"type": "text", "text": {"content": _SETTINGS_PAGE_TITLE}}]}
+        },
+        "children": [
+            {
+                "object": "block",
+                "type": "code",
+                "code": {
+                    "rich_text": [{"type": "text", "text": {"content": json_mod.dumps(settings, ensure_ascii=False)}}],
+                    "language": "json"
+                }
+            }
+        ]
+    }
+    
+    try:
+        resp = requests.post("https://api.notion.com/v1/pages", headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
+        if resp.status_code == 200:
+            page_id = resp.json()['id']
+            _settings_page_id_cache = page_id
+            print(f"SETTINGS CREATE: page_id={page_id}")
+            return page_id
+        else:
+            print(f"SETTINGS CREATE ERROR: {resp.status_code} {resp.text[:200]}")
+    except Exception as e:
+        print(f"SETTINGS CREATE ERROR: {e}")
+    return None
+
+
+def _read_settings(user_id: str) -> tuple:
+    """Читает настройки. Возвращает (page_id, block_id, settings_dict).
+    
+    Использует GET /blocks/{page_id}/children — всегда консистентно.
+    """
+    import json as json_mod
+    
+    page_id = _find_settings_page_id(user_id)
+    if not page_id:
+        return None, None, {}
+    
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    
+    try:
+        # GET блоки страницы — это ВСЕГДА консистентно (не database query)
+        resp = requests.get(
+            f"https://api.notion.com/v1/blocks/{page_id}/children?page_size=5",
+            headers=headers,
+            timeout=DEFAULT_TIMEOUT
+        )
+        if resp.status_code != 200:
+            print(f"SETTINGS READ ERROR: {resp.status_code}")
+            return page_id, None, {}
+        
+        blocks = resp.json().get('results', [])
+        for block in blocks:
+            if block.get('type') == 'code':
+                text_arr = block['code'].get('rich_text', [])
+                if text_arr:
+                    raw = text_arr[0]['text']['content']
+                    try:
+                        settings = json_mod.loads(raw)
+                        if isinstance(settings, dict):
+                            return page_id, block['id'], settings
+                    except (json_mod.JSONDecodeError, ValueError):
+                        pass
+        
+        return page_id, None, {}
+    except Exception as e:
+        print(f"SETTINGS READ ERROR: {e}")
+        return page_id, None, {}
+
+
+def _write_settings(user_id: str, settings: dict):
+    """Записывает настройки через UPDATE block content."""
+    import json as json_mod
+    
+    page_id, block_id, _ = _read_settings(user_id)
     
     headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
     json_content = json_mod.dumps(settings, ensure_ascii=False)
     
-    page_id, _ = _get_settings_page(user_id)
-    
-    if page_id:
-        # PATCH существующей страницы
-        update_url = f"https://api.notion.com/v1/pages/{page_id}"
-        update_payload = {
-            "properties": {
-                'GCalEventID': {'rich_text': [{'type': 'text', 'text': {'content': json_content}}]}
-            }
-        }
+    if block_id:
+        # UPDATE существующего блока
         try:
-            resp = requests.patch(update_url, headers=headers, json=update_payload, timeout=DEFAULT_TIMEOUT)
-            if resp.status_code != 200:
-                print(f"SETTINGS UPDATE ERROR: {resp.status_code} {resp.text[:200]}")
+            resp = requests.patch(
+                f"https://api.notion.com/v1/blocks/{block_id}",
+                headers=headers,
+                json={
+                    "code": {
+                        "rich_text": [{"type": "text", "text": {"content": json_content}}],
+                        "language": "json"
+                    }
+                },
+                timeout=DEFAULT_TIMEOUT
+            )
+            if resp.status_code == 200:
+                print(f"SETTINGS WRITE OK")
             else:
-                print(f"SETTINGS UPDATE OK: {list(settings.keys())}")
+                print(f"SETTINGS WRITE ERROR: {resp.status_code} {resp.text[:200]}")
         except Exception as e:
-            print(f"SETTINGS UPDATE ERROR: {e}")
+            print(f"SETTINGS WRITE ERROR: {e}")
+    elif page_id:
+        # Страница есть но блока нет — добавляем блок
+        try:
+            resp = requests.patch(
+                f"https://api.notion.com/v1/blocks/{page_id}/children",
+                headers=headers,
+                json={
+                    "children": [{
+                        "object": "block",
+                        "type": "code",
+                        "code": {
+                            "rich_text": [{"type": "text", "text": {"content": json_content}}],
+                            "language": "json"
+                        }
+                    }]
+                },
+                timeout=DEFAULT_TIMEOUT
+            )
+            if resp.status_code == 200:
+                print(f"SETTINGS APPEND OK")
+            else:
+                print(f"SETTINGS APPEND ERROR: {resp.status_code} {resp.text[:200]}")
+        except Exception as e:
+            print(f"SETTINGS APPEND ERROR: {e}")
     else:
-        # CREATE — только первый раз
-        properties = {
-            'Name': {'title': [{'type': 'text', 'text': {'content': f"Settings for {user_id}"}}]},
-            'UserID': {'rich_text': [{'type': 'text', 'text': {'content': user_id}}]},
-            'State': {'select': {'name': 'settings'}},
-            'GCalEventID': {'rich_text': [{'type': 'text', 'text': {'content': json_content}}]}
-        }
-        log_last_action(properties=properties)
-        print(f"SETTINGS CREATE: new page for {user_id}")
+        # Нет страницы — создаём
+        _create_settings_page(user_id, settings)
 
 
 # --- Public API ---
 
 def get_user_settings(user_id: str) -> dict:
-    """Получает настройки пользователя.
-    
-    Returns:
-        dict: {'reminder_minutes': int, ...}
-    """
-    _, settings = _get_settings_page(user_id)
+    """Получает настройки пользователя."""
+    _, _, settings = _read_settings(user_id)
     if 'reminder_minutes' not in settings:
         settings['reminder_minutes'] = 15
     return settings
@@ -525,55 +617,56 @@ def get_user_settings(user_id: str) -> dict:
 
 def set_user_settings(user_id: str, reminder_minutes: int):
     """Сохраняет reminder_minutes (сохраняя остальные настройки)."""
-    _, settings = _get_settings_page(user_id)
+    _, _, settings = _read_settings(user_id)
     settings['reminder_minutes'] = reminder_minutes
-    _save_settings(user_id, settings)
+    _write_settings(user_id, settings)
 
 
 def get_hidden_tasks(user_id: str) -> list:
     """Получает список скрытых задач ClickUp."""
-    _, settings = _get_settings_page(user_id)
+    _, _, settings = _read_settings(user_id)
     return settings.get('hidden_tasks', [])
 
 
 def set_hidden_tasks(user_id: str, task_ids: list):
     """Сохраняет список скрытых задач."""
-    _, settings = _get_settings_page(user_id)
+    _, _, settings = _read_settings(user_id)
     settings['hidden_tasks'] = task_ids
-    _save_settings(user_id, settings)
+    _write_settings(user_id, settings)
 
 
 def add_hidden_task(user_id: str, task_id: str):
     """Добавляет задачу в скрытые."""
-    _, settings = _get_settings_page(user_id)
+    _, _, settings = _read_settings(user_id)
     hidden = settings.get('hidden_tasks', [])
     if task_id not in hidden:
         hidden.append(task_id)
         settings['hidden_tasks'] = hidden
-        _save_settings(user_id, settings)
+        _write_settings(user_id, settings)
         print(f"HIDDEN: +{task_id}, total={len(hidden)}")
 
 
 def remove_hidden_task(user_id: str, task_id: str):
     """Убирает задачу из скрытых."""
-    _, settings = _get_settings_page(user_id)
+    _, _, settings = _read_settings(user_id)
     hidden = settings.get('hidden_tasks', [])
     if task_id in hidden:
         hidden.remove(task_id)
         settings['hidden_tasks'] = hidden
-        _save_settings(user_id, settings)
+        _write_settings(user_id, settings)
 
 
 def get_user_xp(user_id: str) -> dict:
     """Получает XP пользователя."""
-    _, settings = _get_settings_page(user_id)
+    _, _, settings = _read_settings(user_id)
     return {'xp': settings.get('xp', 0), 'level': settings.get('level', 1)}
 
 
 def set_user_xp(user_id: str, xp_data: dict):
     """Сохраняет XP пользователя."""
-    _, settings = _get_settings_page(user_id)
+    _, _, settings = _read_settings(user_id)
     settings['xp'] = xp_data.get('xp', 0)
     settings['level'] = xp_data.get('level', 1)
-    _save_settings(user_id, settings)
+    _write_settings(user_id, settings)
+
 
