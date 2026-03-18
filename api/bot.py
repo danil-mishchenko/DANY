@@ -58,7 +58,12 @@ try:
         get_active_mode,
         set_active_mode,
         get_transcript_clean,
-        set_transcript_clean
+        set_transcript_clean,
+        save_temp_transcript,
+        get_temp_transcript,
+        get_transcript_buffer,
+        append_to_transcript_buffer,
+        clear_transcript_buffer
     )
     from services.calendar import (
         create_google_calendar_event,
@@ -71,7 +76,8 @@ try:
         process_with_ai,
         summarize_for_search,
         polish_content,
-        clean_transcript
+        clean_transcript,
+        summarize_transcript
     )
     from services.pinecone_svc import (
         upsert_to_pinecone,
@@ -353,6 +359,100 @@ class handler(BaseHTTPRequestHandler):
                     msg = f"⚙️ *Настройки*\n\n📱 *Уведомления*\nЗа сколько минут до события?\n_Текущее: {current_minutes} мин_\n\n🎙 *Транскрипт*\nПодрежим расшифровки:\n_📜 Дословный — точная цитата_"
                     edit_telegram_message(chat_id, callback_query['message']['message_id'], msg, inline_buttons=buttons)
                 
+                elif callback_data.startswith('save_transcript_'):
+                    log_id = callback_data.replace('save_transcript_', '')
+                    message_id = callback_query['message']['message_id']
+                    transcript_text = get_temp_transcript(log_id)
+                    
+                    if transcript_text:
+                        # Сохраняем как новую заметку
+                        ai_data = process_with_ai(transcript_text)
+                        title = ai_data.get('main_title', 'Транскрипт')
+                        category = ai_data.get('category', 'Мысль')
+                        tags = ai_data.get('tags', [])
+                        
+                        try:
+                            # Убираем разметки markdown если есть
+                            import re
+                            clean_text = re.sub(r'[*_`]', '', transcript_text)
+                            new_page_id = create_notion_page(title, clean_text, category, tags)
+                            
+                            buttons = [[
+                                {"text": "👁️ Просмотр", "callback_data": f"view_page_{new_page_id}"},
+                                {"text": "🗑️ Удалить", "callback_data": f"delete_notion_{new_page_id}"}
+                            ]]
+                            edit_telegram_message(chat_id, message_id, f"✅ Транскрипт сохранен как заметка: *{title}*", inline_buttons=buttons)
+                        except Exception as e:
+                            print(f"Ошибка сохранения транскрипта: {e}")
+                            edit_telegram_message(chat_id, message_id, f"❌ Ошибка сохранения заметки.")
+                    else:
+                        edit_telegram_message(chat_id, message_id, "❌ Транскрипт устарел или уже сохранен.")
+                        
+                elif callback_data.startswith('summarize_transcript_'):
+                    log_id = callback_data.replace('summarize_transcript_', '')
+                    message_id = callback_query['message']['message_id']
+                    
+                    transcript_text = get_temp_transcript(log_id) # Текст удаляется после этого
+                    if transcript_text:
+                        edit_telegram_message(chat_id, message_id, "⏳ Генерирую резюме...")
+                        try:
+                            summary = summarize_transcript(transcript_text)
+                            
+                            # Пересохраняем оригинал для возможности сохранить в Notion
+                            new_log_id = save_temp_transcript(user_id, transcript_text)
+                            
+                            msg = f"📊 *Выжимка транскрипта:*\n\n{summary}\n\n_Оригинальный текст сохранен во временный буфер._"
+                            buttons = []
+                            if new_log_id:
+                                buttons.append([{"text": "💾 Сохранить в Notion", "callback_data": f"save_transcript_{new_log_id}"}])
+                            buttons.append([{"text": "🔙 Закрыть", "callback_data": "exit_transcript"}])
+                            
+                            edit_telegram_message(chat_id, message_id, msg, inline_buttons=buttons)
+                            
+                        except Exception as e:
+                            print(f"Ошибка резюме: {e}")
+                            edit_telegram_message(chat_id, message_id, "❌ Ошибка при генерации резюме.")
+                    else:
+                        edit_telegram_message(chat_id, message_id, "❌ Транскрипт устарел и был удален.")
+                        
+                elif callback_data == 'transcript_finish':
+                    # Завершаем мульти-транскрипт (Фича 1)
+                    message_id = callback_query['message']['message_id']
+                    _, buffer_content = get_transcript_buffer(user_id)
+                    clear_transcript_buffer(user_id)
+                    
+                    if buffer_content:
+                        # Очищаем сепараторы в начале
+                        if buffer_content.startswith("\n\n---\n\n"):
+                             buffer_content = buffer_content[9:]
+                             
+                        # Сохраняем во временный лог для кнопок
+                        log_id = save_temp_transcript(user_id, buffer_content)
+                        buttons = []
+                        if log_id:
+                            buttons.append([
+                                {"text": "💾 В Notion", "callback_data": f"save_transcript_{log_id}"},
+                                {"text": "📊 Резюме", "callback_data": f"summarize_transcript_{log_id}"}
+                            ])
+                            
+                        buttons.append([{"text": "🔙 Выйти из режима", "callback_data": "exit_transcript"}])
+                        
+                        max_len = 3900
+                        if len(buffer_content) <= max_len:
+                            edit_telegram_message(chat_id, message_id, f"✅ *Мульти-транскрипт завершен:*\n\n{buffer_content}", inline_buttons=buttons)
+                        else:
+                            # Ограничиваем превью
+                            preview = buffer_content[:max_len] + "\n\n... _(Текст обрезан)_"
+                            edit_telegram_message(chat_id, message_id, f"✅ *Мульти-транскрипт завершен (Слишком длинный):*\n\n{preview}", inline_buttons=buttons)
+                    else:
+                        edit_telegram_message(chat_id, message_id, "❌ Нет активного буфера транскриптов.")
+
+                elif callback_data == 'transcript_clear':
+                    # Очищаем мульти-транскрипт (Фича 1)
+                    message_id = callback_query['message']['message_id']
+                    clear_transcript_buffer(user_id)
+                    edit_telegram_message(chat_id, message_id, "🗑️ Буфер мульти-транскрипта очищен.")
+
                 elif callback_data == 'set_transcript_clean':
                     set_transcript_clean(user_id, True)
                     answer_callback_query(callback_query_id, "✨ Чистый режим")
@@ -812,23 +912,42 @@ class handler(BaseHTTPRequestHandler):
                 
             # --- ЛОГИКА СОЗДАНИЯ НОВОЙ ЗАМЕТКИ (если это не команда) ---
             
+            text_to_process = None
+            is_text_message = False
+            photo_urls = []
+            
+            # --- ОПРЕДЕЛЕНИЕ ТИПА СООБЩЕНИЯ (АУДИО/ВИДЕО) ---
+            is_audio_message = False
+            audio_file_id = None
+            
+            if 'voice' in message:
+                is_audio_message = True
+                audio_file_id = message['voice']['file_id']
+            elif 'audio' in message:
+                is_audio_message = True
+                audio_file_id = message['audio']['file_id']
+            elif 'video_note' in message:
+                is_audio_message = True
+                audio_file_id = message['video_note']['file_id']
+            elif 'document' in message:
+                mime_type = message['document'].get('mime_type', '')
+                if mime_type.startswith('audio/') or mime_type.startswith('video/'):
+                    is_audio_message = True
+                    audio_file_id = message['document']['file_id']
+
             # Перехватываем текст/фото в режиме транскрипта
             active_mode = get_active_mode(user_id)
-            if active_mode == 'transcript' and 'voice' not in message:
+            if active_mode == 'transcript' and not is_audio_message:
                 buttons = [[{"text": "🔙 Выйти из режима", "callback_data": "exit_transcript"}]]
                 send_message_with_buttons(
                     chat_id,
                     "🎙 Сейчас активен режим транскрипта.\n"
-                    "Отправьте *голосовое сообщение* или нажмите кнопку ниже для выхода.",
+                    "Отправьте *аудио, голосовое или кружочек* или нажмите кнопку ниже для выхода.",
                     buttons
                 )
                 self.send_response(200)
                 self.end_headers()
                 return
-            
-            text_to_process = None
-            is_text_message = False
-            photo_urls = []
             
             # Обработка фото
             if 'photo' in message:
@@ -864,17 +983,18 @@ class handler(BaseHTTPRequestHandler):
                     self.end_headers()
                     return
             
-            elif 'voice' in message:
+            elif is_audio_message:
                 # Проверяем активный режим транскрипта
                 active_mode = get_active_mode(user_id)
                 if active_mode == 'transcript':
                     # РЕЖИМ ТРАНСКРИПТА — только расшифровка, без AI и Notion
-                    send_telegram_message(chat_id, "⏳ Распознаю речь...")
-                    audio_bytes = download_telegram_file(message['voice']['file_id']).read()
+                    # Сообщаем, что приняли часть
+                    send_telegram_message(chat_id, "⏳ Распознаю аудио...")
+                    audio_bytes = download_telegram_file(audio_file_id).read()
                     transcript = transcribe_with_assemblyai(audio_bytes)
                     
                     if not transcript:
-                        send_telegram_message(chat_id, "❌ Не удалось распознать речь. Попробуйте другое голосовое.")
+                        send_telegram_message(chat_id, "❌ Не удалось распознать речь. Попробуйте другой файл.")
                         self.send_response(200)
                         self.end_headers()
                         return
@@ -888,38 +1008,35 @@ class handler(BaseHTTPRequestHandler):
                             print(f"Clean transcript error: {e}")
                             # Fallback: отдаём raw если чистка упала
                     
-                    mode_icon = "✨" if is_clean else "📜"
+                    # Добавляем в буфер
+                    new_buffer = append_to_transcript_buffer(user_id, transcript)
                     
-                    # Smart Chunking: разбиваем длинные транскрипты
-                    max_len = 3900  # Запас от лимита 4096
-                    if len(transcript) <= max_len:
-                        msg = f"{mode_icon} *Транскрипт:*\n─────────────────\n{transcript}\n─────────────────"
-                        buttons = [[{"text": "🔙 Выйти из режима", "callback_data": "exit_transcript"}]]
+                    if new_buffer:
+                        # Считаем количество частей по сепараторам
+                        parts_count = new_buffer.count("\n\n---\n\n")
+                        mode_icon = "✨" if is_clean else "📜"
+                        
+                        preview_text = transcript
+                        if len(transcript) > 500:
+                            preview_text = transcript[:500] + "..."
+                            
+                        msg = (
+                            f"{mode_icon} *Распознана часть {parts_count}:*\n_{preview_text}_\n\n"
+                            f"🗣 Отправьте следующее аудио, чтобы дополнить, или нажмите кнопку ниже."
+                        )
+                        
+                        buttons = [
+                            [
+                                {"text": "✅ Завершить и показать все", "callback_data": "transcript_finish"}
+                            ],
+                            [
+                                {"text": "🗑 Очистить", "callback_data": "transcript_clear"},
+                                {"text": "🔙 Выйти", "callback_data": "exit_transcript"}
+                            ]
+                        ]
                         send_message_with_buttons(chat_id, msg, buttons)
                     else:
-                        # Разбиваем по предложениям
-                        sentences = transcript.replace('. ', '.\n').split('\n')
-                        chunks = []
-                        current_chunk = ""
-                        for sentence in sentences:
-                            if len(current_chunk) + len(sentence) + 1 > max_len:
-                                if current_chunk:
-                                    chunks.append(current_chunk.strip())
-                                current_chunk = sentence
-                            else:
-                                current_chunk += " " + sentence if current_chunk else sentence
-                        if current_chunk:
-                            chunks.append(current_chunk.strip())
-                        
-                        total = len(chunks)
-                        for i, chunk in enumerate(chunks):
-                            header = f"{mode_icon} *Транскрипт ({i+1}/{total}):*" if total > 1 else f"{mode_icon} *Транскрипт:*"
-                            msg = f"{header}\n─────────────────\n{chunk}\n─────────────────"
-                            if i == total - 1:
-                                buttons = [[{"text": "🔙 Выйти из режима", "callback_data": "exit_transcript"}]]
-                                send_message_with_buttons(chat_id, msg, buttons)
-                            else:
-                                send_telegram_message(chat_id, msg)
+                        send_telegram_message(chat_id, "❌ Ошибка буферизации.")
                     
                     self.send_response(200)
                     self.end_headers()
@@ -927,7 +1044,7 @@ class handler(BaseHTTPRequestHandler):
                 
                 # Обычный режим — заметка через AI
                 send_telegram_message(chat_id, "⏳ Распознаю речь...")
-                audio_bytes = download_telegram_file(message['voice']['file_id']).read()
+                audio_bytes = download_telegram_file(audio_file_id).read()
                 text_to_process = transcribe_with_assemblyai(audio_bytes)
                 if not text_to_process: 
                     send_telegram_message(chat_id, "❌ Не удалось распознать речь.")

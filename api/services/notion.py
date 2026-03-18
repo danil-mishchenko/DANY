@@ -410,10 +410,129 @@ def get_user_state(user_id: str):
         'page_id': get_text(properties.get('NotionPageID')),
         'pending_edit_text': get_text(properties.get('GCalEventID'))  # Переиспользуем поле
     }
-    
     delete_notion_page(state_page_id)
     return state_details
 
+
+# === TEMP TRANSCRIPT STORAGE (Features 1, 2, 6) ===
+
+def save_temp_transcript(user_id: str, text: str) -> str:
+    """Сохраняет длинный текст транскрипта во временный лог и возвращает его ID.
+    Необходимо для обхода лимита 64 байт в callback_data кнопок Telegram.
+    """
+    log_db_id = NOTION_LOG_DB_ID
+    if not log_db_id:
+        return None
+
+    url = 'https://api.notion.com/v1/pages'
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    
+    properties = {
+        'Name': {'title': [{'type': 'text', 'text': {'content': f"Temp Transcript for {user_id}"}}]},
+        'UserID': {'rich_text': [{'type': 'text', 'text': {'content': str(user_id)}}]},
+        'State': {'select': {'name': 'temp_transcript'}}
+    }
+    
+    payload = {'parent': {'database_id': log_db_id}, 'properties': properties}
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
+        response.raise_for_status()
+        log_id = response.json()['id']
+        
+        # Записываем длинный текст блоком (может быть > 2000 симв)
+        add_to_notion_page(log_id, text)
+        return log_id
+    except Exception as e:
+        print(f"Ошибка сохранения временного транскрипта: {e}")
+        return None
+
+
+def get_temp_transcript(log_id: str) -> str:
+    """Получает текст временного транскрипта и удаляет запись."""
+    if not log_id:
+        return None
+        
+    try:
+        content = get_notion_page_content(log_id)
+        # Удаляем временную запись после использования
+        delete_notion_page(log_id)
+        return content
+    except Exception as e:
+        print(f"Ошибка получения временного транскрипта: {e}")
+        return None
+
+
+def get_transcript_buffer(user_id: str):
+    """Возвращает текущий буфер мульти-транскрипта для пользователя."""
+    log_db_id = NOTION_LOG_DB_ID
+    if not log_db_id: 
+        return None, ""
+    
+    payload = {
+        "filter": {"and": [
+            {"property": "UserID", "rich_text": {"equals": str(user_id)}}, 
+            {"property": "State", "select": {"equals": "transcript_buffer"}}
+        ]},
+        "sorts": [{"timestamp": "created_time", "direction": "descending"}], 
+        "page_size": 1
+    }
+    query_url = f"https://api.notion.com/v1/databases/{log_db_id}/query"
+    headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+    
+    try:
+        response = requests.post(query_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
+        results = response.json().get('results', [])
+        
+        if not results:
+            return None, ""
+            
+        buffer_page_id = results[0]['id']
+        content = get_notion_page_content(buffer_page_id)
+        return buffer_page_id, content
+    except Exception as e:
+        print(f"Ошибка получения буфера транскрипта: {e}")
+        return None, ""
+
+
+def append_to_transcript_buffer(user_id: str, new_text: str) -> str:
+    """Добавляет текст в буфер мульти-транскрипта. Создаёт, если нужно."""
+    buffer_page_id, _ = get_transcript_buffer(user_id)
+    
+    if not buffer_page_id:
+        log_db_id = NOTION_LOG_DB_ID
+        url = 'https://api.notion.com/v1/pages'
+        headers = {'Authorization': f'Bearer {NOTION_TOKEN}', 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'}
+        
+        properties = {
+            'Name': {'title': [{'type': 'text', 'text': {'content': f"Transcript Buffer for {user_id}"}}]},
+            'UserID': {'rich_text': [{'type': 'text', 'text': {'content': str(user_id)}}]},
+            'State': {'select': {'name': 'transcript_buffer'}}
+        }
+        
+        payload = {'parent': {'database_id': log_db_id}, 'properties': properties}
+        
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
+            response.raise_for_status()
+            buffer_page_id = response.json()['id']
+        except Exception as e:
+            print(f"Ошибка создания буфера транскрипта: {e}")
+            return None
+
+    # Добавляем разделитель и новый текст
+    separator = "\n\n---\n\n"
+    add_to_notion_page(buffer_page_id, separator + new_text)
+    
+    # Возвращаем обновленный контент
+    return get_notion_page_content(buffer_page_id)
+
+
+def clear_transcript_buffer(user_id: str):
+    """Удаляет буфер мульти-транскрипта."""
+    buffer_page_id, _ = get_transcript_buffer(user_id)
+    if buffer_page_id:
+        delete_notion_page(buffer_page_id)
 
 
 # === UNIFIED SETTINGS STORAGE ===

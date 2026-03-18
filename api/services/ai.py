@@ -28,8 +28,11 @@ def transcribe_with_assemblyai(audio_file_bytes) -> str:
     audio_url = upload_response.json()['upload_url']
     print("Аудиофайл успешно загружен в AssemblyAI.")
 
-    # 2. Запускаем задачу транскрибации
-    transcript_request = {'audio_url': audio_url, 'language_code': 'ru'}
+    # 2. Запускаем задачу транскрибации (с автоопределением языка)
+    transcript_request = {
+        'audio_url': audio_url,
+        'language_detection': True
+    }
     transcript_response = requests.post(
         "https://api.assemblyai.com/v2/transcript",
         json=transcript_request,
@@ -59,6 +62,24 @@ def transcribe_with_assemblyai(audio_file_bytes) -> str:
     
     print(f"Превышено время ожидания транскрибации после {MAX_POLLING_ATTEMPTS} попыток")
     return None
+
+
+def summarize_transcript(text: str) -> str:
+    """Генерирует краткую выжимку из длинного транскрипта (Feature 6)."""
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {OPENAI_API_KEY}"}
+    
+    system_prompt = (
+        "Ты — секретарь. Твоя задача — сделать КРАТКУЮ выжимку из предоставленного "
+        "транскрипта голосового сообщения. Напиши 1-3 предложения, передающие суть, "
+        "или короткий bullet-point список (до 3 пунктов), если обсуждалось несколько тем. "
+        "Не добавляй водные фразы вроде 'В сообщении говорится...' — начинай сразу с сути."
+    )
+    
+    data = {"model": "gpt-4o-mini", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}]}
+    response = requests.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT)
+    response.raise_for_status()
+    return response.json()['choices'][0]['message']['content'].strip()
 
 
 def process_with_ai(text: str) -> dict:
