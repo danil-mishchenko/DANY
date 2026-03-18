@@ -1063,10 +1063,10 @@ class handler(BaseHTTPRequestHandler):
                         
                         max_len = 3900
                         if len(transcript) <= max_len:
-                            send_message_with_buttons(chat_id, f"✅ *Одиночный транскрипт ({mode_icon}):*\n\n{transcript}", buttons)
+                            send_message_with_buttons(chat_id, f"✅ *Одиночный транскрипт ({mode_icon}):*\n\n{transcript}", buttons, reply_to_message_id=message.get('message_id'))
                         else:
                             preview = transcript[:max_len] + "\n\n... _(Текст обрезан)_"
-                            send_message_with_buttons(chat_id, f"✅ *Одиночный транскрипт ({mode_icon}):*\n\n{preview}", buttons)
+                            send_message_with_buttons(chat_id, f"✅ *Одиночный транскрипт ({mode_icon}):*\n\n{preview}", buttons, reply_to_message_id=message.get('message_id'))
                             
                         self.send_response(200)
                         self.end_headers()

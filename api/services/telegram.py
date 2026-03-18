@@ -55,7 +55,7 @@ def get_telegram_file_url(file_id: str) -> str:
     return f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
 
 
-def send_telegram_message(chat_id: str, text: str, use_html: bool = False, add_undo_button: bool = False, show_keyboard: bool = False):
+def send_telegram_message(chat_id: str, text: str, use_html: bool = False, add_undo_button: bool = False, show_keyboard: bool = False, reply_to_message_id: int = None):
     """Отправляет текстовое сообщение пользователю.
     
     Args:
@@ -64,6 +64,7 @@ def send_telegram_message(chat_id: str, text: str, use_html: bool = False, add_u
         use_html: Использовать HTML вместо Markdown
         add_undo_button: Добавить inline-кнопку "Отменить"
         show_keyboard: Показать постоянную клавиатуру
+        reply_to_message_id: ID сообщения, на которое нужно ответить
     """
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     
@@ -82,6 +83,9 @@ def send_telegram_message(chat_id: str, text: str, use_html: bool = False, add_u
         payload['reply_markup'] = json.dumps(keyboard)
     elif show_keyboard:
         payload['reply_markup'] = json.dumps(get_persistent_keyboard())
+        
+    if reply_to_message_id:
+        payload['reply_to_message_id'] = reply_to_message_id
 
     try:
         requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT).raise_for_status()
@@ -89,7 +93,7 @@ def send_telegram_message(chat_id: str, text: str, use_html: bool = False, add_u
         print(f"Ошибка при отправке сообщения в Telegram: {e}")
 
 
-def send_message_with_buttons(chat_id: str, text: str, inline_buttons: list, use_html: bool = False):
+def send_message_with_buttons(chat_id: str, text: str, inline_buttons: list, use_html: bool = False, reply_to_message_id: int = None):
     """Отправляет сообщение с inline-кнопками.
     
     Args:
@@ -98,6 +102,7 @@ def send_message_with_buttons(chat_id: str, text: str, inline_buttons: list, use
         inline_buttons: Список рядов кнопок, например:
             [[{"text": "Кнопка 1", "callback_data": "action1"}]]
         use_html: Использовать HTML вместо Markdown
+        reply_to_message_id: ID сообщения, на которое нужно ответить
     """
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     
@@ -107,6 +112,9 @@ def send_message_with_buttons(chat_id: str, text: str, inline_buttons: list, use
         'parse_mode': 'HTML' if use_html else 'Markdown',
         'reply_markup': json.dumps({"inline_keyboard": inline_buttons})
     }
+    
+    if reply_to_message_id:
+        payload['reply_to_message_id'] = reply_to_message_id
 
     try:
         requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT).raise_for_status()
