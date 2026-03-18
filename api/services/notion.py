@@ -829,3 +829,16 @@ def set_transcript_clean(user_id: str, clean: bool):
     _, _, settings = _read_settings(user_id)
     settings['transcript_clean'] = clean
     _write_settings(user_id, settings)
+
+
+def get_transcript_single_mode(user_id: str) -> bool:
+    """Возвращает True если включен одиночный режим обработки транскриптов с таймкодами."""
+    _, _, settings = _read_settings(user_id)
+    return settings.get('transcript_single_mode', False)
+
+
+def set_transcript_single_mode(user_id: str, single_mode: bool):
+    """Устанавливает опцию одиночного режима транскрипта."""
+    _, _, settings = _read_settings(user_id)
+    settings['transcript_single_mode'] = single_mode
+    _write_settings(user_id, settings)

@@ -54,7 +54,11 @@ def transcribe_with_assemblyai(audio_file_bytes) -> str:
         status = polling_response.json()['status']
         if status == 'completed':
             print("Транскрибация завершена.")
-            return polling_response.json()['text']
+            data = polling_response.json()
+            return {
+                'text': data.get('text', ''),
+                'words': data.get('words', [])
+            }
         elif status == 'error':
             print("Ошибка транскрибации в AssemblyAI.")
             return None
@@ -70,10 +74,10 @@ def summarize_transcript(text: str) -> str:
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {OPENAI_API_KEY}"}
     
     system_prompt = (
-        "Ты — секретарь. Твоя задача — сделать КРАТКУЮ выжимку из предоставленного "
-        "транскрипта голосового сообщения. Напиши 1-3 предложения, передающие суть, "
-        "или короткий bullet-point список (до 3 пунктов), если обсуждалось несколько тем. "
-        "Не добавляй водные фразы вроде 'В сообщении говорится...' — начинай сразу с сути."
+        "Ты — секретарь. Твоя задача — сделать ВЫЖИМКУ из предоставленного "
+        "транскрипта голосового сообщения. Напиши 3-5 предложений детальнее, передающие суть, "
+        "или подробный bullet-point список (до 5 пунктов), чтобы не упустить важные детали "
+        "и контекст. Не добавляй водные фразы вроде 'В сообщении говорится...' — начинай сразу с сути."
     )
     
     data = {"model": "gpt-4o-mini", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}]}
@@ -209,7 +213,8 @@ def clean_transcript(raw_text: str) -> str:
         "- НЕ объединять и НЕ разделять предложения\n"
         "- НЕ исправлять грамматику\n"
         "- НЕ добавлять пунктуацию которой не было\n"
-        "- НЕ добавлять комментарии\n\n"
+        "- НЕ добавлять комментарии\n"
+        "- СТРОГО сохранять любые таймкоды (например [00:15]) в начале абзацев\n\n"
         "Верни ТОЛЬКО очищенный текст."
     )
     
