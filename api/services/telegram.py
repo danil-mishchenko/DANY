@@ -11,7 +11,7 @@ def get_persistent_keyboard():
     """Возвращает структуру постоянной клавиатуры под полем ввода."""
     return {
         "keyboard": [
-            [{"text": "📝 Заметки"}, {"text": "🔍 Поиск"}],
+            [{"text": "📝 Заметки"}, {"text": "🔍 Поиск"}, {"text": "🎙 Транскрипт"}],
             [{"text": "📋 ClickUp"}, {"text": "⚙️ Настройки"}]
         ],
         "resize_keyboard": True,

@@ -54,7 +54,11 @@ try:
         set_user_settings,
         get_hidden_tasks,
         set_hidden_tasks,
-        add_hidden_task
+        add_hidden_task,
+        get_active_mode,
+        set_active_mode,
+        get_transcript_clean,
+        set_transcript_clean
     )
     from services.calendar import (
         create_google_calendar_event,
@@ -66,7 +70,8 @@ try:
         transcribe_with_assemblyai,
         process_with_ai,
         summarize_for_search,
-        polish_content
+        polish_content,
+        clean_transcript
     )
     from services.pinecone_svc import (
         upsert_to_pinecone,
@@ -319,6 +324,60 @@ class handler(BaseHTTPRequestHandler):
                         buttons.append([{"text": "🌐 Открыть ClickUp", "url": "https://app.clickup.com"}])
                     edit_telegram_message(chat_id, callback_query['message']['message_id'], msg, inline_buttons=buttons)
                 
+                elif callback_data == 'exit_transcript':
+                    set_active_mode(user_id, None)
+                    send_telegram_message(chat_id, "✅ Режим транскрипта выключен.", show_keyboard=True)
+                
+                elif callback_data == 'set_transcript_raw':
+                    set_transcript_clean(user_id, False)
+                    answer_callback_query(callback_query_id, "📜 Дословный режим")
+                    # Обновляем меню настроек
+                    settings = get_user_settings(user_id)
+                    current_minutes = settings.get('reminder_minutes', 15)
+                    is_clean = False
+                    buttons = [
+                        [
+                            {"text": "5 мин" + (" ✓" if current_minutes == 5 else ""), "callback_data": "set_reminder_5"},
+                            {"text": "15 мин" + (" ✓" if current_minutes == 15 else ""), "callback_data": "set_reminder_15"},
+                            {"text": "30 мин" + (" ✓" if current_minutes == 30 else ""), "callback_data": "set_reminder_30"}
+                        ],
+                        [
+                            {"text": "1 час" + (" ✓" if current_minutes == 60 else ""), "callback_data": "set_reminder_60"},
+                            {"text": "Выкл" + (" ✓" if current_minutes == 0 else ""), "callback_data": "set_reminder_0"}
+                        ],
+                        [
+                            {"text": "📜 Дословный ✓", "callback_data": "set_transcript_raw"},
+                            {"text": "✨ Чистый", "callback_data": "set_transcript_clean"}
+                        ]
+                    ]
+                    msg = f"⚙️ *Настройки*\n\n📱 *Уведомления*\nЗа сколько минут до события?\n_Текущее: {current_minutes} мин_\n\n🎙 *Транскрипт*\nПодрежим расшифровки:\n_📜 Дословный — точная цитата_"
+                    edit_telegram_message(chat_id, callback_query['message']['message_id'], msg, inline_buttons=buttons)
+                
+                elif callback_data == 'set_transcript_clean':
+                    set_transcript_clean(user_id, True)
+                    answer_callback_query(callback_query_id, "✨ Чистый режим")
+                    # Обновляем меню настроек
+                    settings = get_user_settings(user_id)
+                    current_minutes = settings.get('reminder_minutes', 15)
+                    is_clean = True
+                    buttons = [
+                        [
+                            {"text": "5 мин" + (" ✓" if current_minutes == 5 else ""), "callback_data": "set_reminder_5"},
+                            {"text": "15 мин" + (" ✓" if current_minutes == 15 else ""), "callback_data": "set_reminder_15"},
+                            {"text": "30 мин" + (" ✓" if current_minutes == 30 else ""), "callback_data": "set_reminder_30"}
+                        ],
+                        [
+                            {"text": "1 час" + (" ✓" if current_minutes == 60 else ""), "callback_data": "set_reminder_60"},
+                            {"text": "Выкл" + (" ✓" if current_minutes == 0 else ""), "callback_data": "set_reminder_0"}
+                        ],
+                        [
+                            {"text": "📜 Дословный", "callback_data": "set_transcript_raw"},
+                            {"text": "✨ Чистый ✓", "callback_data": "set_transcript_clean"}
+                        ]
+                    ]
+                    msg = f"⚙️ *Настройки*\n\n📱 *Уведомления*\nЗа сколько минут до события?\n_Текущее: {current_minutes} мин_\n\n🎙 *Транскрипт*\nПодрежим расшифровки:\n_✨ Чистый — без слов-заполнителей_"
+                    edit_telegram_message(chat_id, callback_query['message']['message_id'], msg, inline_buttons=buttons)
+                
                 self.send_response(200)
                 self.end_headers()
                 return
@@ -405,6 +464,13 @@ class handler(BaseHTTPRequestHandler):
             
             text = message.get('text', '')
             
+            # АВТОВЫХОД из режима транскрипта при нажатии ДРУГОЙ кнопки клавиатуры
+            keyboard_buttons = {"📝 Заметки", "🔍 Поиск", "📋 ClickUp", "⚙️ Настройки"}
+            if text in keyboard_buttons:
+                active_mode = get_active_mode(user_id)
+                if active_mode == 'transcript':
+                    set_active_mode(user_id, None)
+            
             # ОБРАБОТКА КНОПОК КЛАВИАТУРЫ
             if text == "📝 Заметки":
                 text = "/notes"  # Перенаправляем на существующую логику
@@ -432,10 +498,30 @@ class handler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.end_headers()
                 return
+            elif text == "🎙 Транскрипт":
+                # Включаем режим транскрипта
+                set_active_mode(user_id, 'transcript')
+                is_clean = get_transcript_clean(user_id)
+                mode_label = "✨ Чистый" if is_clean else "📜 Дословный"
+                buttons = [[{"text": "🔙 Выйти из режима", "callback_data": "exit_transcript"}]]
+                send_message_with_buttons(
+                    chat_id,
+                    f"🎙 *Режим транскрипта активен*\n\n"
+                    f"Пересылайте голосовые — получите чистый текст.\n\n"
+                    f"Текущий подрежим: {mode_label}\n"
+                    f"_Изменить подрежим можно в ⚙️ Настройки_",
+                    buttons
+                )
+                self.send_response(200)
+                self.end_headers()
+                return
             elif text == "⚙️ Настройки":
-                # Показываем меню настроек
+                # Показываем меню настроек (расширенное)
+                # При входе в настройки — выходим из транскрипт-режима не нужно,
+                # настройки работают параллельно
                 settings = get_user_settings(user_id)
                 current_minutes = settings.get('reminder_minutes', 15)
+                is_clean = get_transcript_clean(user_id)
                 
                 buttons = [
                     [
@@ -446,10 +532,15 @@ class handler(BaseHTTPRequestHandler):
                     [
                         {"text": "1 час" + (" ✓" if current_minutes == 60 else ""), "callback_data": "set_reminder_60"},
                         {"text": "Выкл" + (" ✓" if current_minutes == 0 else ""), "callback_data": "set_reminder_0"}
+                    ],
+                    [
+                        {"text": "📜 Дословный" + (" ✓" if not is_clean else ""), "callback_data": "set_transcript_raw"},
+                        {"text": "✨ Чистый" + (" ✓" if is_clean else ""), "callback_data": "set_transcript_clean"}
                     ]
                 ]
                 
-                msg = f"⚙️ *Настройки уведомлений*\n\n📱 За сколько минут до события присылать напоминание в Telegram?\n\n_Текущее: {current_minutes} мин_"
+                clean_desc = "✨ Чистый — без слов-заполнителей" if is_clean else "📜 Дословный — точная цитата"
+                msg = f"⚙️ *Настройки*\n\n📱 *Уведомления*\nЗа сколько минут до события?\n_Текущее: {current_minutes} мин_\n\n🎙 *Транскрипт*\nПодрежим расшифровки:\n_{clean_desc}_"
                 send_message_with_buttons(chat_id, msg, buttons)
                 self.send_response(200)
                 self.end_headers()
@@ -720,6 +811,21 @@ class handler(BaseHTTPRequestHandler):
                 return
                 
             # --- ЛОГИКА СОЗДАНИЯ НОВОЙ ЗАМЕТКИ (если это не команда) ---
+            
+            # Перехватываем текст/фото в режиме транскрипта
+            active_mode = get_active_mode(user_id)
+            if active_mode == 'transcript' and 'voice' not in message:
+                buttons = [[{"text": "🔙 Выйти из режима", "callback_data": "exit_transcript"}]]
+                send_message_with_buttons(
+                    chat_id,
+                    "🎙 Сейчас активен режим транскрипта.\n"
+                    "Отправьте *голосовое сообщение* или нажмите кнопку ниже для выхода.",
+                    buttons
+                )
+                self.send_response(200)
+                self.end_headers()
+                return
+            
             text_to_process = None
             is_text_message = False
             photo_urls = []
@@ -759,6 +865,67 @@ class handler(BaseHTTPRequestHandler):
                     return
             
             elif 'voice' in message:
+                # Проверяем активный режим транскрипта
+                active_mode = get_active_mode(user_id)
+                if active_mode == 'transcript':
+                    # РЕЖИМ ТРАНСКРИПТА — только расшифровка, без AI и Notion
+                    send_telegram_message(chat_id, "⏳ Распознаю речь...")
+                    audio_bytes = download_telegram_file(message['voice']['file_id']).read()
+                    transcript = transcribe_with_assemblyai(audio_bytes)
+                    
+                    if not transcript:
+                        send_telegram_message(chat_id, "❌ Не удалось распознать речь. Попробуйте другое голосовое.")
+                        self.send_response(200)
+                        self.end_headers()
+                        return
+                    
+                    # Чистый режим — убираем заполнители через AI
+                    is_clean = get_transcript_clean(user_id)
+                    if is_clean:
+                        try:
+                            transcript = clean_transcript(transcript)
+                        except Exception as e:
+                            print(f"Clean transcript error: {e}")
+                            # Fallback: отдаём raw если чистка упала
+                    
+                    mode_icon = "✨" if is_clean else "📜"
+                    
+                    # Smart Chunking: разбиваем длинные транскрипты
+                    max_len = 3900  # Запас от лимита 4096
+                    if len(transcript) <= max_len:
+                        msg = f"{mode_icon} *Транскрипт:*\n─────────────────\n{transcript}\n─────────────────"
+                        buttons = [[{"text": "🔙 Выйти из режима", "callback_data": "exit_transcript"}]]
+                        send_message_with_buttons(chat_id, msg, buttons)
+                    else:
+                        # Разбиваем по предложениям
+                        sentences = transcript.replace('. ', '.\n').split('\n')
+                        chunks = []
+                        current_chunk = ""
+                        for sentence in sentences:
+                            if len(current_chunk) + len(sentence) + 1 > max_len:
+                                if current_chunk:
+                                    chunks.append(current_chunk.strip())
+                                current_chunk = sentence
+                            else:
+                                current_chunk += " " + sentence if current_chunk else sentence
+                        if current_chunk:
+                            chunks.append(current_chunk.strip())
+                        
+                        total = len(chunks)
+                        for i, chunk in enumerate(chunks):
+                            header = f"{mode_icon} *Транскрипт ({i+1}/{total}):*" if total > 1 else f"{mode_icon} *Транскрипт:*"
+                            msg = f"{header}\n─────────────────\n{chunk}\n─────────────────"
+                            if i == total - 1:
+                                buttons = [[{"text": "🔙 Выйти из режима", "callback_data": "exit_transcript"}]]
+                                send_message_with_buttons(chat_id, msg, buttons)
+                            else:
+                                send_telegram_message(chat_id, msg)
+                    
+                    self.send_response(200)
+                    self.end_headers()
+                    return
+                
+                # Обычный режим — заметка через AI
                 send_telegram_message(chat_id, "⏳ Распознаю речь...")
                 audio_bytes = download_telegram_file(message['voice']['file_id']).read()
                 text_to_process = transcribe_with_assemblyai(audio_bytes)

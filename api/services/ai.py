@@ -166,3 +166,40 @@ def polish_content(old_content: str, new_content: str) -> str:
     response = requests.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
     return response.json()['choices'][0]['message']['content']
+
+
+def clean_transcript(raw_text: str) -> str:
+    """Удаляет слова-заполнители из транскрипта, сохраняя смысл и структуру.
+    
+    Строгий промпт не позволяет AI переформулировать текст —
+    только убирает «ну», «типа», «короче», «эээ» и т.п.
+    """
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {OPENAI_API_KEY}"}
+    
+    system_prompt = (
+        "Ты — корректор транскрипта. Твоя ЕДИНСТВЕННАЯ задача — удалить слова-заполнители "
+        "из текста. Слова-заполнители: ну, типа, короче, блин, эээ, ммм, ааа, как бы, "
+        "в общем, то есть, собственно, так сказать, значит, вот, слушай, смотри, "
+        "ну вот, ну типа, ну короче, как бы это сказать.\n\n"
+        "СТРОГИЕ ПРАВИЛА:\n"
+        "- НЕ менять порядок слов\n"
+        "- НЕ перефразировать предложения\n"
+        "- НЕ объединять и НЕ разделять предложения\n"
+        "- НЕ исправлять грамматику\n"
+        "- НЕ добавлять пунктуацию которой не было\n"
+        "- НЕ добавлять комментарии\n\n"
+        "Верни ТОЛЬКО очищенный текст."
+    )
+    
+    data = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": raw_text}
+        ]
+    }
+    
+    response = requests.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT)
+    response.raise_for_status()
+    return response.json()['choices'][0]['message']['content']

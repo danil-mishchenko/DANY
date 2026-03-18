@@ -670,3 +670,43 @@ def set_user_xp(user_id: str, xp_data: dict):
     _write_settings(user_id, settings)
 
 
+# === ACTIVE MODE ===
+
+def get_active_mode(user_id: str) -> str:
+    """Получает текущий активный режим бота (например, 'transcript').
+    
+    Returns:
+        Строка с названием режима или None если обычный режим.
+    """
+    _, _, settings = _read_settings(user_id)
+    return settings.get('active_mode', None)
+
+
+def set_active_mode(user_id: str, mode: str):
+    """Устанавливает активный режим бота.
+    
+    Args:
+        user_id: ID пользователя
+        mode: Название режима ('transcript') или None для сброса
+    """
+    _, _, settings = _read_settings(user_id)
+    if mode is None:
+        settings.pop('active_mode', None)
+    else:
+        settings['active_mode'] = mode
+    _write_settings(user_id, settings)
+
+
+# === TRANSCRIPT SETTINGS ===
+
+def get_transcript_clean(user_id: str) -> bool:
+    """Возвращает True если включён чистый режим транскрипта (без заполнителей)."""
+    _, _, settings = _read_settings(user_id)
+    return settings.get('transcript_clean', False)
+
+
+def set_transcript_clean(user_id: str, clean: bool):
+    """Устанавливает подрежим транскрипта (чистый / дословный)."""
+    _, _, settings = _read_settings(user_id)
+    settings['transcript_clean'] = clean
+    _write_settings(user_id, settings)
