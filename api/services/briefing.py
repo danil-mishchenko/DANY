@@ -197,7 +197,7 @@ def generate_personal_insight(tasks: list, events: list) -> str:
 - НЕ используй HTML теги"""
 
         payload = {
-            "model": "gpt-4o-mini",
+            "model": "gpt-5.4-nano",
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 200,
             "temperature": 0.9

@@ -80,7 +80,7 @@ def summarize_transcript(text: str) -> str:
         "и контекст. Не добавляй водные фразы вроде 'В сообщении говорится...' — начинай сразу с сути."
     )
     
-    data = {"model": "gpt-4o-mini", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}]}
+    data = {"model": "gpt-5.4-nano", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}]}
     response = requests.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
     return response.json()['choices'][0]['message']['content'].strip()
@@ -121,7 +121,7 @@ def process_with_ai(text: str) -> dict:
     Формат JSON: {{"main_title": "...", "category": "...", "formatted_body": "...", "is_reminder_only": true/false, "events": [{{"title": "...", "datetime_iso": "YYYY-MM-DDTHH:MM:SS"}}]}}
     Заметка: --- {text} ---
     """
-    data = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}}
+    data = {"model": "gpt-5.4-nano", "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}}
     response = requests.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
     ai_response = response.json()
@@ -144,7 +144,7 @@ def summarize_for_search(context: str, question: str) -> str:
     ---
     Вопрос пользователя: "{question}"
     """
-    data = {"model": "gpt-4o-mini", "messages": [{"role": "system", "content": "Ты — полезный ассистент, отвечающий на вопросы по тексту."}, {"role": "user", "content": prompt}]}
+    data = {"model": "gpt-5.4-nano", "messages": [{"role": "system", "content": "Ты — полезный ассистент, отвечающий на вопросы по тексту."}, {"role": "user", "content": prompt}]}
     response = requests.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
     return response.json()['choices'][0]['message']['content']
@@ -181,7 +181,7 @@ def polish_content(old_content: str, new_content: str) -> str:
     """
     
     data = {
-        "model": "gpt-4o-mini", 
+        "model": "gpt-5.4-nano", 
         "messages": [
             {"role": "system", "content": "Ты — редактор заметок. Полируешь текст, сохраняя смысл."},
             {"role": "user", "content": prompt}
@@ -219,7 +219,7 @@ def clean_transcript(raw_text: str) -> str:
     )
     
     data = {
-        "model": "gpt-4o-mini",
+        "model": "gpt-5.4-nano",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": raw_text}
