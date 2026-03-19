@@ -96,23 +96,29 @@ try:
         chunk_start = words[0]['start']
         
         for word in words:
+            if chunk_start is None:
+                chunk_start = word.get('start', 0)
+                
             current_chunk.append(word['text'])
+            
             # Start new line if sentence ends
             if word['text'].endswith(('.', '?', '!')):
                 text = " ".join(current_chunk)
-                minutes = chunk_start // 60000
-                seconds = (chunk_start % 60000) // 1000
+                
+                safe_start = chunk_start if chunk_start is not None else 0
+                minutes = safe_start // 60000
+                seconds = (safe_start % 60000) // 1000
+                
                 timecode = f"[{minutes:02d}:{seconds:02d}]"
                 formatted.append(f"{timecode} {text}")
                 current_chunk = []
                 chunk_start = None
-            elif chunk_start is None:
-                chunk_start = word['start']
                 
         if current_chunk:
             text = " ".join(current_chunk)
-            minutes = chunk_start // 60000
-            seconds = (chunk_start % 60000) // 1000
+            safe_start = chunk_start if chunk_start is not None else 0
+            minutes = safe_start // 60000
+            seconds = (safe_start % 60000) // 1000
             timecode = f"[{minutes:02d}:{seconds:02d}]"
             formatted.append(f"{timecode} {text}")
             
@@ -965,6 +971,9 @@ class handler(BaseHTTPRequestHandler):
             elif 'video_note' in message:
                 is_audio_message = True
                 audio_file_id = message['video_note']['file_id']
+            elif 'video' in message:
+                is_audio_message = True
+                audio_file_id = message['video']['file_id']
             elif 'document' in message:
                 mime_type = message['document'].get('mime_type', '')
                 if mime_type.startswith('audio/') or mime_type.startswith('video/'):
