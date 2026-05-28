@@ -423,7 +423,24 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
                 except Exception as e:
                     send_telegram_message(chat_id, f"❌ *Ошибка при создании события '{event['title']}':*\n`{e}`")
         
-        final_report_text = f"✅ *Заметка создана!*\n\n📋 *{notion_title}*\n_{formatted_body[:100]}..._" if len(formatted_body) > 100 else f"✅ *Заметка создана!*\n\n📋 *{notion_title}*\n_{formatted_body}_"
+        # Очищаем превью от Markdown и HTML-тегов для обеспечения совместимости с парсером Telegram
+        clean_preview = formatted_body
+        # Удаляем HTML-теги
+        clean_preview = re.sub(r'<[^>]+>', '', clean_preview)
+        # Удаляем фоновые цвета ИИ {{color="..."}}
+        clean_preview = re.sub(r'\{\{color=[^}]+\}\}', '', clean_preview)
+        # Удаляем символы форматирования Markdown
+        clean_preview = re.sub(r'[*_`~#]', '', clean_preview)
+        # Удаляем To-Do маркеры
+        clean_preview = re.sub(r'-\s*\[\s*[xX\s]?\s*\]\s*', '', clean_preview)
+        
+        clean_preview = clean_preview.strip()
+        if len(clean_preview) > 120:
+            preview_text = clean_preview[:120].strip() + "..."
+        else:
+            preview_text = clean_preview
+            
+        final_report_text = f"✅ *Заметка создана!*\n\n📋 *{notion_title}*\n_{preview_text}_"
         final_report_text += f"\n\n_Категория: {notion_category}_"
         
         if created_events_titles:
