@@ -126,8 +126,12 @@ def create_notion_page(title: str, formatted_content: str, category: str) -> str
     print(f"Страница {page_id} успешно создана в Notion через Markdown API.")
 
     try:
+        import threading
         full_text_for_embedding = f"Заголовок: {title}\nСодержимое: {formatted_content}"
-        upsert_to_pinecone(page_id, full_text_for_embedding)
+        t = threading.Thread(target=upsert_to_pinecone, args=(page_id, full_text_for_embedding))
+        t.daemon = True
+        t.start()
+        t.join(timeout=1.5)  # Ждем максимум 1.5 секунды, чтобы не задерживать Telegram-вебхук
     except Exception as e:
         print(f"ОШИБКА ИНДЕКСАЦИИ В PINECONE: {e}")
         
