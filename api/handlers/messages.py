@@ -427,8 +427,8 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
         clean_preview = formatted_body
         # Удаляем HTML-теги
         clean_preview = re.sub(r'<[^>]+>', '', clean_preview)
-        # Удаляем фоновые цвета ИИ {{color="..."}}
-        clean_preview = re.sub(r'\{\{color=[^}]+\}\}', '', clean_preview)
+        # Удаляем фоновые цвета ИИ {color="..."} и {{color="..."}}
+        clean_preview = re.sub(r'\{+color=[^}]+\}+', '', clean_preview)
         # Удаляем символы форматирования Markdown
         clean_preview = re.sub(r'[*_`~#]', '', clean_preview)
         # Удаляем To-Do маркеры
