@@ -310,12 +310,7 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
     if text_to_process:
         status_message_id = None
         if is_text_message:
-            progress_bar = "⬜️⬜️⬜️⬜️⬜️⬜️ 0%"
-            status_message_id = send_initial_status_message(chat_id, f"⏳ Анализирую...\n`{progress_bar}`")
-
-        if status_message_id:
-            progress_bar = "🟩🟩⬜️⬜️⬜️⬜️ 33%"
-            edit_telegram_message(chat_id, status_message_id, f"⏳ Анализирую...\n`{progress_bar}`")
+            status_message_id = send_initial_status_message(chat_id, "⏳ Записываю заметку...")
         
         ai_data = process_with_ai(text_to_process)
         notion_title = ai_data.get('main_title', 'Новая заметка')
@@ -373,9 +368,6 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
             return
         
         # --- ОБЫЧНЫЙ РЕЖИМ (Notion + календарь) ---
-        if status_message_id:
-            progress_bar = "🟩🟩🟩🟩⬜️⬜️ 66%"
-            edit_telegram_message(chat_id, status_message_id, f"⏳ Сохраняю в Notion...\n`{progress_bar}`")
 
         notion_page_id = None
         try:
@@ -405,9 +397,6 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
         created_events_titles = []
         created_events_links = []
         if valid_events:
-            if status_message_id:
-                progress_bar = "🟩🟩🟩🟩🟩🟩 99%"
-                edit_telegram_message(chat_id, status_message_id, f"⏳ Добавляю в календарь...\n`{progress_bar}`")
             for event in valid_events:
                 try:
                     gcal_result = create_google_calendar_event(
