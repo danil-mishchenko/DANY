@@ -10,7 +10,7 @@ USER_TIMEZONE = os.getenv('USER_TIMEZONE', 'Europe/Kyiv')
 # --- Валидация переменных окружения ---
 REQUIRED_ENV_VARS = [
     'TELEGRAM_TOKEN', 'NOTION_TOKEN', 'NOTION_DATABASE_ID',
-    'DEEPSEEK_API_KEY', 'OPENAI_API_KEY', 'PINECONE_API_KEY', 'PINECONE_HOST'
+    'OPENAI_API_KEY', 'PINECONE_API_KEY', 'PINECONE_HOST'
 ]
 
 def validate_env_vars():

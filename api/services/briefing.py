@@ -10,7 +10,7 @@ from utils.config import (
     NOTION_TOKEN, NOTION_DATABASE_ID, ALLOWED_TELEGRAM_ID
 )
 from services.clickup import get_my_tasks, _escape_markdown, PRIORITY_EMOJI
-from services.notion import get_hidden_tasks, get_user_xp, set_user_xp
+from services.state import get_hidden_tasks, get_user_xp, set_user_xp
 
 
 # === RPG XP СИСТЕМА ===

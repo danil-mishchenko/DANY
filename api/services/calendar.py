@@ -3,9 +3,6 @@
 import json
 from datetime import datetime, timedelta
 
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-
 from utils.config import GOOGLE_CREDENTIALS_JSON, GOOGLE_CALENDAR_ID, USER_TIMEZONE
 from utils.markdown import markdown_to_gcal_html
 
@@ -16,6 +13,9 @@ def create_google_calendar_event(title: str, description: str, start_time_iso: s
     Returns:
         dict: {'id': event_id, 'html_link': URL для открытия события}
     """
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+
     creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
     creds = service_account.Credentials.from_service_account_info(creds_info)
     service = build('calendar', 'v3', credentials=creds)
@@ -41,6 +41,9 @@ def create_google_calendar_event(title: str, description: str, start_time_iso: s
 def delete_gcal_event(calendar_id: str, event_id: str):
     """Удаляет событие из Google Календаря."""
     try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+
         creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
         creds = service_account.Credentials.from_service_account_info(creds_info)
         service = build('calendar', 'v3', credentials=creds)

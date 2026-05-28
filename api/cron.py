@@ -16,7 +16,7 @@ if api_dir not in sys.path:
 GOOGLE_CREDENTIALS_JSON = os.environ.get('GOOGLE_CREDENTIALS_JSON')
 GOOGLE_CALENDAR_ID = os.environ.get('GOOGLE_CALENDAR_ID')
 ALLOWED_TELEGRAM_ID = os.environ.get('ALLOWED_TELEGRAM_ID')
-USER_TIMEZONE = os.environ.get('USER_TIMEZONE', 'Europe/Kiev')
+USER_TIMEZONE = os.environ.get('USER_TIMEZONE', 'Europe/Kyiv')
 
 
 class handler(BaseHTTPRequestHandler):
@@ -28,7 +28,7 @@ class handler(BaseHTTPRequestHandler):
             from googleapiclient.discovery import build
             from google.oauth2 import service_account
             from services.telegram import send_telegram_message, send_message_with_buttons
-            from services.notion import get_user_settings
+            from services.state import get_user_settings
             
             # === БРИФИНГИ ===
             tz = pytz.timezone(USER_TIMEZONE)

@@ -69,7 +69,7 @@ class handler(BaseHTTPRequestHandler):
         """Начисляет XP за закрытую задачу."""
         try:
             from services.clickup import get_my_tasks
-            from services.notion import get_user_xp, set_user_xp
+            from services.state import get_user_xp, set_user_xp
             from services.telegram import send_telegram_message
             
             if not ALLOWED_TELEGRAM_ID:
