@@ -21,11 +21,12 @@ def _get_pinecone_index():
 
 def get_text_embedding(text: str):
     """Превращает текст в вектор с помощью OpenAI."""
-    import openai
-    openai.api_key = OPENAI_API_KEY
-    response = openai.embeddings.create(
+    from openai import OpenAI
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    response = client.embeddings.create(
         input=text,
-        model="text-embedding-3-small"
+        model="text-embedding-3-small",
+        timeout=2.0
     )
     return response.data[0].embedding
 
@@ -36,21 +37,28 @@ def upsert_to_pinecone(page_id: str, text_content: str):
         print(f"Нет контента для индексации страницы {page_id}")
         return
     
-    print(f"Создаю вектор для страницы {page_id}...")
-    vector = get_text_embedding(text_content)
-    _get_pinecone_index().upsert(vectors=[(page_id, vector)])
-    print(f"Вектор для страницы {page_id} успешно сохранен в Pinecone.")
+    try:
+        print(f"Создаю вектор для страницы {page_id}...")
+        vector = get_text_embedding(text_content)
+        _get_pinecone_index().upsert(vectors=[(page_id, vector)])
+        print(f"Вектор для страницы {page_id} успешно сохранен в Pinecone.")
+    except Exception as e:
+        print(f"ОШИБКА ИНДЕКСАЦИИ В PINECONE: {e}")
 
 
 def query_pinecone(query_text: str, top_k: int = 3):
-    """Ищет наиболее похожие векторы в Pinecone."""
-    print(f"Создаю вектор для поискового запроса: '{query_text}'")
-    query_vector = get_text_embedding(query_text)
-    results = _get_pinecone_index().query(
-        vector=query_vector,
-        top_k=top_k,
-        include_values=False
-    )
-    page_ids = [match['id'] for match in results['matches']]
-    print(f"Pinecone нашел ID: {page_ids}")
-    return page_ids
+    """Ищет наиболее похожие векторы в Pinecone с обработкой ошибок."""
+    try:
+        print(f"Создаю вектор для поискового запроса: '{query_text}'")
+        query_vector = get_text_embedding(query_text)
+        results = _get_pinecone_index().query(
+            vector=query_vector,
+            top_k=top_k,
+            include_values=False
+        )
+        page_ids = [match['id'] for match in results['matches']]
+        print(f"Pinecone нашел ID: {page_ids}")
+        return page_ids
+    except Exception as e:
+        print(f"ОШИБКА ПОИСКА В PINECONE: {e}")
+        return []
