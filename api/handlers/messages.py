@@ -387,11 +387,23 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
                 )
         except Exception as e:
             detailed_error = e.response.text if hasattr(e, 'response') else str(e)
-            final_text = f"❌ *Ошибка при создании заметки в Notion:*\n<pre>{detailed_error}</pre>"
+            err_msg_lower = str(e).lower()
+            if "timeout" in err_msg_lower or "timed out" in err_msg_lower or "readtimedouterror" in err_msg_lower:
+                final_text = (
+                    "⚠️ *Сохранение в Notion заняло больше времени, чем обычно!*\n\n"
+                    "Из-за ограничений серверов мы завершили ожидание ответа, но страница "
+                    "*скорее всего успешно создалась* в Notion.\n"
+                    "Пожалуйста, проверьте её в списке заметок (команда /notes) или через поиск!"
+                )
+                use_html_flag = False
+            else:
+                final_text = f"❌ *Ошибка при создании заметки в Notion:*\n<pre>{detailed_error}</pre>"
+                use_html_flag = True
+                
             if status_message_id: 
-                edit_telegram_message(chat_id, status_message_id, final_text, use_html=True)
+                edit_telegram_message(chat_id, status_message_id, final_text, use_html=use_html_flag)
             else: 
-                send_telegram_message(chat_id, final_text, use_html=True)
+                send_telegram_message(chat_id, final_text, use_html=use_html_flag)
             return
 
         created_events_titles = []

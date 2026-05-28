@@ -120,7 +120,7 @@ def create_notion_page(title: str, formatted_content: str, category: str) -> str
         'markdown': formatted_content
     }
     
-    response = requests.post(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
+    response = requests.post(url, headers=headers, json=payload, timeout=(3.0, 5.0))
     response.raise_for_status()
     page_id = response.json()['id']
     print(f"Страница {page_id} успешно создана в Notion через Markdown API.")
@@ -131,7 +131,7 @@ def create_notion_page(title: str, formatted_content: str, category: str) -> str
         t = threading.Thread(target=upsert_to_pinecone, args=(page_id, full_text_for_embedding))
         t.daemon = True
         t.start()
-        t.join(timeout=1.5)  # Ждем максимум 1.5 секунды, чтобы не задерживать Telegram-вебхук
+        t.join(timeout=0.2)  # Ждем максимум 0.2 секунды, так как библиотека прелоадится и переиспользует глобальный OpenAI клиент
     except Exception as e:
         print(f"ОШИБКА ИНДЕКСАЦИИ В PINECONE: {e}")
         

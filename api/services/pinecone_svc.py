@@ -1,11 +1,23 @@
 # -*- coding: utf-8 -*-
 """Сервис для работы с Pinecone векторной базой."""
 
+from openai import OpenAI
+from pinecone import Pinecone
 from utils.config import OPENAI_API_KEY, PINECONE_API_KEY, PINECONE_HOST
 
-# Лази-инициализация клиентов
+# Глобальные клиенты для повторного использования (Warm Start)
 _pc = None
 _pinecone_index = None
+_openai_client = None
+
+
+def _get_openai_client():
+    """Возвращает глобальный переиспользуемый клиент OpenAI."""
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    return _openai_client
+
 
 def _get_pinecone_index():
     """Инициализирует и возвращает индекс Pinecone при первом вызове."""
@@ -13,16 +25,14 @@ def _get_pinecone_index():
     if _pinecone_index is None:
         if not PINECONE_API_KEY or not PINECONE_HOST:
             raise ValueError("PINECONE_API_KEY или PINECONE_HOST не заданы в конфигурации.")
-        from pinecone import Pinecone
         _pc = Pinecone(api_key=PINECONE_API_KEY)
         _pinecone_index = _pc.Index(host=PINECONE_HOST)
     return _pinecone_index
 
 
 def get_text_embedding(text: str):
-    """Превращает текст в вектор с помощью OpenAI."""
-    from openai import OpenAI
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    """Превращает текст в вектор с помощью OpenAI с переиспользованием клиента."""
+    client = _get_openai_client()
     response = client.embeddings.create(
         input=text,
         model="text-embedding-3-small",
