@@ -110,19 +110,8 @@ def get_last_notion_note() -> str:
         return ""
 
     try:
-        url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
-        payload = {
-            "sorts": [{"timestamp": "created_time", "direction": "descending"}],
-            "page_size": 1
-        }
-        headers = {
-            'Authorization': f'Bearer {NOTION_TOKEN}',
-            'Content-Type': 'application/json',
-            'Notion-Version': '2022-06-28'
-        }
-        response = requests.post(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
-        response.raise_for_status()
-        results = response.json().get('results', [])
+        from services.notion import get_latest_notes
+        results = get_latest_notes(1)
         if results:
             page = results[0]
             props = page.get('properties', {})
@@ -133,7 +122,7 @@ def get_last_notion_note() -> str:
                         return _escape_markdown(title_arr[0].get('plain_text', ''))
         return ""
     except Exception as e:
-        print(f"Briefing Notion error: {e}")
+        print(f"Ошибка получения последней заметки для брифинга: {e}")
         return ""
 
 

@@ -8,11 +8,13 @@ from api.services.notion import get_notion_page_content
 
 def fetch_all_pages():
     """Fetches all pages from the Notion database with pagination."""
-    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
+    from services.notion import get_data_source_id
+    ds_id = get_data_source_id()
+    url = f"https://api.notion.com/v1/data_sources/{ds_id}/query"
     headers = {
         'Authorization': f'Bearer {NOTION_TOKEN}',
         'Content-Type': 'application/json',
-        'Notion-Version': '2022-06-28'
+        'Notion-Version': '2026-03-11'
     }
     
     all_pages = []
