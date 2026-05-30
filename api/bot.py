@@ -47,6 +47,21 @@ class handler(BaseHTTPRequestHandler):
             body = self.rfile.read(content_length)
             update = json.loads(body.decode('utf-8'))
 
+            # --- ДЕДУПЛИКАЦИЯ ЗАПРОСОВ TELEGRAM (защита от infinite loop при таймаутах) ---
+            update_id = update.get('update_id')
+            if update_id:
+                try:
+                    from services.state import redis_client
+                    dedup_key = f"dany:update:{update_id}"
+                    if redis_client.get(dedup_key):
+                        print(f"[DEDUPLICATION] Игнорируем повторный запрос Telegram с update_id {update_id}")
+                        self.send_response(200)
+                        self.end_headers()
+                        return
+                    redis_client.setex(dedup_key, 300, "1")
+                except Exception as redis_err:
+                    print(f"[DEDUPLICATION ERROR] {redis_err}")
+
             message = update.get('message')
             callback_query = update.get('callback_query')
 
