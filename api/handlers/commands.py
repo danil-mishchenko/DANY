@@ -99,6 +99,26 @@ def handle_command(chat_id: int, user_id: str, text: str, message: dict) -> bool
                 
         send_telegram_message(chat_id, f"✅ Успешно! Проиндексировано {indexed_count} заметок.", show_keyboard=True)
         return True
+
+    # 3.5. /clear_queue
+    elif text_clean == '/clear_queue':
+        send_telegram_message(chat_id, "🧹 Запрашиваю очистку очереди Telegram...")
+        try:
+            import requests
+            from utils.config import TELEGRAM_TOKEN
+            info_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getWebhookInfo"
+            info_res = requests.get(info_url, timeout=10).json()
+            webhook_url = info_res.get('result', {}).get('url', '')
+            
+            if webhook_url:
+                set_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={webhook_url}&drop_pending_updates=true"
+                res = requests.get(set_url, timeout=10).json()
+                send_telegram_message(chat_id, f"🧹 *Очередь Telegram успешно очищена!*\n\nРезультат: `{res}`", show_keyboard=True)
+            else:
+                send_telegram_message(chat_id, "❌ Не удалось определить текущий URL вебхука.", show_keyboard=True)
+        except Exception as clear_err:
+            send_telegram_message(chat_id, f"❌ Ошибка при очистке очереди: `{clear_err}`", show_keyboard=True)
+        return True
         
     # 4. /briefing
     elif text_clean == '/briefing':
