@@ -112,8 +112,19 @@ def search_notion_pages(query: str):
 
 
 def get_notion_page_content(page_id: str) -> str:
-    """Получает все текстовое содержимое со страницы Notion как Markdown."""
+    """Получает все текстовое содержимое со страницы Notion как Markdown (с перманентным кэшированием в Redis)."""
     page_id = format_notion_uuid(page_id)
+    
+    # Пытаемся получить из кэша Redis
+    try:
+        from services.state import get_note_content_cache, set_note_content_cache
+        cached_content = get_note_content_cache(page_id)
+        if cached_content is not None:
+            print(f"[notion.py] Cache HIT для контента страницы {page_id}")
+            return cached_content
+    except Exception as cache_err:
+        print(f"[notion.py] Ошибка чтения перманентного кэша: {cache_err}")
+
     url = f"https://api.notion.com/v1/pages/{page_id}/markdown"
     headers = {
         'Authorization': f'Bearer {NOTION_TOKEN}', 
@@ -121,13 +132,22 @@ def get_notion_page_content(page_id: str) -> str:
     }
     response = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
-    return response.json().get('markdown', '')
+    markdown_content = response.json().get('markdown', '')
+    
+    # Сохраняем в кэш Redis
+    try:
+        set_note_content_cache(page_id, markdown_content)
+    except Exception as cache_err:
+        print(f"[notion.py] Ошибка записи в перманентный кэш: {cache_err}")
+        
+    return markdown_content
+
 
 
 def create_notion_page(title: str, formatted_content: str, category: str) -> str:
     """Создает страницу в Notion с помощью Markdown API и отправляет её в Pinecone."""
     # Import here to avoid circular dependency
-    from services.pinecone_svc import upsert_to_pinecone
+    from services.pinecone_svc import upsert_parent_child_chunks
     
     url = 'https://api.notion.com/v1/pages'
     headers = {
@@ -159,19 +179,34 @@ def create_notion_page(title: str, formatted_content: str, category: str) -> str
 
     try:
         from utils.config import ALLOWED_TELEGRAM_ID
-        from services.state import invalidate_notes_cache
+        from services.state import invalidate_notes_cache, set_note_content_cache, set_note_metadata
         if ALLOWED_TELEGRAM_ID:
             invalidate_notes_cache(ALLOWED_TELEGRAM_ID)
+        # Сохраняем в кэш Redis
+        set_note_content_cache(page_id, formatted_content)
+        
+        # Сохраняем метаданные в Redis
+        import pytz
+        from utils.config import USER_TIMEZONE
+        tz = pytz.timezone(USER_TIMEZONE)
+        now_str = datetime.now(tz).isoformat()
+        
+        meta = {
+            'title': title,
+            'category': category,
+            'created_time': now_str,
+            'last_edited_time': now_str
+        }
+        set_note_metadata(page_id, meta)
     except Exception as cache_err:
-        print(f"Ошибка инвалидации кэша при создании: {cache_err}")
+        print(f"Ошибка записи кэша при создании: {cache_err}")
 
     try:
         import threading
-        full_text_for_embedding = f"Заголовок: {title}\nСодержимое: {formatted_content}"
-        t = threading.Thread(target=upsert_to_pinecone, args=(page_id, full_text_for_embedding))
+        t = threading.Thread(target=upsert_parent_child_chunks, args=(page_id, title, formatted_content))
         t.daemon = True
         t.start()
-        t.join(timeout=0.2)  # Ждем максимум 0.2 секунды, так как библиотека прелоадится и переиспользует глобальный OpenAI клиент
+        t.join(timeout=0.2)  # Ждем максимум 0.2 секунды
     except Exception as e:
         print(f"ОШИБКА ИНДЕКСАЦИИ В PINECONE: {e}")
         
@@ -194,11 +229,14 @@ def delete_notion_page(page_id: str):
     
     try:
         from utils.config import ALLOWED_TELEGRAM_ID
-        from services.state import invalidate_notes_cache
+        from services.state import invalidate_notes_cache, delete_note_content_cache, delete_note_metadata
         if ALLOWED_TELEGRAM_ID:
             invalidate_notes_cache(ALLOWED_TELEGRAM_ID)
+        # Удаляем из кэша Redis
+        delete_note_content_cache(page_id)
+        delete_note_metadata(page_id)
     except Exception as cache_err:
-        print(f"Ошибка инвалидации кэша при удалении: {cache_err}")
+        print(f"Ошибка обновления кэша при удалении: {cache_err}")
 
 
 def restore_notion_page(page_id: str):
@@ -217,11 +255,14 @@ def restore_notion_page(page_id: str):
     
     try:
         from utils.config import ALLOWED_TELEGRAM_ID
-        from services.state import invalidate_notes_cache
+        from services.state import invalidate_notes_cache, delete_note_content_cache, delete_note_metadata
         if ALLOWED_TELEGRAM_ID:
             invalidate_notes_cache(ALLOWED_TELEGRAM_ID)
+        # Сбрасываем кэш контента
+        delete_note_content_cache(page_id)
+        delete_note_metadata(page_id)
     except Exception as cache_err:
-        print(f"Ошибка инвалидации кэша при восстановлении: {cache_err}")
+        print(f"Ошибка обновления кэша при восстановлении: {cache_err}")
 
 
 def add_to_notion_page(page_id: str, text_to_add: str):
@@ -249,11 +290,13 @@ def add_to_notion_page(page_id: str, text_to_add: str):
     
     try:
         from utils.config import ALLOWED_TELEGRAM_ID
-        from services.state import invalidate_notes_cache
+        from services.state import invalidate_notes_cache, delete_note_content_cache
         if ALLOWED_TELEGRAM_ID:
             invalidate_notes_cache(ALLOWED_TELEGRAM_ID)
+        # Сбрасываем кэш контента
+        delete_note_content_cache(page_id)
     except Exception as cache_err:
-        print(f"Ошибка инвалидации кэша при добавлении: {cache_err}")
+        print(f"Ошибка обновления кэша при добавлении: {cache_err}")
 
 
 def add_image_to_page(page_id: str, image_url: str, caption: str = None):
@@ -325,11 +368,43 @@ def replace_page_content(page_id: str, new_content: str):
     
     try:
         from utils.config import ALLOWED_TELEGRAM_ID
-        from services.state import invalidate_notes_cache
+        from services.state import invalidate_notes_cache, set_note_content_cache, get_note_metadata, set_note_metadata
         if ALLOWED_TELEGRAM_ID:
             invalidate_notes_cache(ALLOWED_TELEGRAM_ID)
+        # Записываем новый контент в кэш
+        set_note_content_cache(page_id, new_content)
+        
+        # Обновляем last_edited_time в метаданных Redis
+        import pytz
+        from utils.config import USER_TIMEZONE
+        tz = pytz.timezone(USER_TIMEZONE)
+        now_str = datetime.now(tz).isoformat()
+        
+        meta = get_note_metadata(page_id)
+        if meta:
+            meta['last_edited_time'] = now_str
+        else:
+            meta = {
+                'title': get_page_title(page_id),
+                'category': 'Мысль',
+                'created_time': now_str,
+                'last_edited_time': now_str
+            }
+        set_note_metadata(page_id, meta)
     except Exception as cache_err:
-        print(f"Ошибка инвалидации кэша при замене контента: {cache_err}")
+        print(f"Ошибка обновления кэша при замене контента: {cache_err}")
+        
+    try:
+        # Также обновляем вектор в Pinecone в фоне!
+        from services.pinecone_svc import upsert_parent_child_chunks
+        title = get_page_title(page_id)
+        import threading
+        t = threading.Thread(target=upsert_parent_child_chunks, args=(page_id, title, new_content))
+        t.daemon = True
+        t.start()
+        t.join(timeout=0.2)
+    except Exception as pe:
+        print(f"Ошибка обновления вектора при замене контента: {pe}")
 
 
 def rename_page(page_id: str, new_title: str):

@@ -54,3 +54,46 @@ def delete_gcal_event(calendar_id: str, event_id: str):
     except Exception as e:
         print(f"Ошибка при удалении события GCal: {e}")
         return False
+
+
+def get_calendar_events_for_range(start_time_iso: str, end_time_iso: str) -> list:
+    """Получает события из Google Календаря за указанный промежуток времени.
+    
+    start_time_iso: ISO строка (например, '2026-05-30T00:00:00+03:00')
+    end_time_iso: ISO строка (например, '2026-05-31T23:59:59+03:00')
+    """
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+
+        creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
+        creds = service_account.Credentials.from_service_account_info(creds_info)
+        service = build('calendar', 'v3', credentials=creds)
+        
+        events_result = service.events().list(
+            calendarId=GOOGLE_CALENDAR_ID,
+            timeMin=start_time_iso,
+            timeMax=end_time_iso,
+            singleEvents=True,
+            orderBy='startTime',
+            maxResults=25
+        ).execute()
+        
+        events = events_result.get('items', [])
+        formatted_events = []
+        for event in events:
+            start = event.get('start', {}).get('dateTime') or event.get('start', {}).get('date')
+            end = event.get('end', {}).get('dateTime') or event.get('end', {}).get('date')
+            formatted_events.append({
+                'summary': event.get('summary', 'Без названия'),
+                'description': event.get('description', ''),
+                'start': start,
+                'end': end,
+                'link': event.get('htmlLink', '')
+            })
+        print(f"[calendar.py] Успешно загружено {len(formatted_events)} событий из Google Calendar.")
+        return formatted_events
+    except Exception as e:
+        print(f"[calendar.py] Ошибка при чтении календаря: {e}")
+        return []
+

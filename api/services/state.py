@@ -459,3 +459,91 @@ def invalidate_notes_cache(user_id: str):
         print(f"[state.py] Notes cache invalidated for {user_id}")
     except Exception as e:
         print(f"[state.py] Error invalidating notes cache: {e}")
+
+
+# === 11. PERMANENT NOTES CONTENT CACHE ===
+
+def set_note_content_cache(page_id: str, content: str):
+    """Сохраняет полный Markdown-контент страницы в Redis навсегда (без TTL)."""
+    if not page_id:
+        return
+    page_id = str(page_id)
+    key = f"dany:note:{page_id}:content"
+    try:
+        redis_client.set(key, content)
+        print(f"[state.py] Перманентный кэш контента записан для страницы {page_id}")
+    except Exception as e:
+        print(f"[state.py] Ошибка записи контента в Redis для {page_id}: {e}")
+
+
+def get_note_content_cache(page_id: str) -> Optional[str]:
+    """Получает полный Markdown-контент страницы из Redis."""
+    if not page_id:
+        return None
+    page_id = str(page_id)
+    key = f"dany:note:{page_id}:content"
+    try:
+        data = redis_client.get(key)
+        if data:
+            return data
+    except Exception as e:
+        print(f"[state.py] Ошибка чтения контента из Redis для {page_id}: {e}")
+    return None
+
+
+def delete_note_content_cache(page_id: str):
+    """Удаляет кэш контента страницы из Redis."""
+    if not page_id:
+        return
+    page_id = str(page_id)
+    key = f"dany:note:{page_id}:content"
+    try:
+        redis_client.delete(key)
+        print(f"[state.py] Перманентный кэш контента удален для страницы {page_id}")
+    except Exception as e:
+        print(f"[state.py] Ошибка удаления контента из Redis для {page_id}: {e}")
+
+
+# === 12. PERMANENT NOTES METADATA CACHE ===
+
+def set_note_metadata(page_id: str, meta: dict):
+    """Сохраняет метаданные заметки (заголовок, категория, даты) в Redis без TTL."""
+    if not page_id:
+        return
+    page_id = str(page_id)
+    key = f"dany:note:{page_id}:metadata"
+    try:
+        redis_client.set(key, json.dumps(meta, ensure_ascii=False))
+        print(f"[state.py] Перманентные метаданные записаны для страницы {page_id}")
+    except Exception as e:
+        print(f"[state.py] Ошибка записи метаданных в Redis для {page_id}: {e}")
+
+
+def get_note_metadata(page_id: str) -> Optional[dict]:
+    """Получает метаданные заметки из Redis."""
+    if not page_id:
+        return None
+    page_id = str(page_id)
+    key = f"dany:note:{page_id}:metadata"
+    try:
+        data = redis_client.get(key)
+        if data:
+            return json.loads(data)
+    except Exception as e:
+        print(f"[state.py] Ошибка чтения метаданных из Redis для {page_id}: {e}")
+    return None
+
+
+def delete_note_metadata(page_id: str):
+    """Удаляет метаданные заметки из Redis."""
+    if not page_id:
+        return
+    page_id = str(page_id)
+    key = f"dany:note:{page_id}:metadata"
+    try:
+        redis_client.delete(key)
+        print(f"[state.py] Перманентные метаданные удалены для страницы {page_id}")
+    except Exception as e:
+        print(f"[state.py] Ошибка удаления метаданных из Redis для {page_id}: {e}")
+
+

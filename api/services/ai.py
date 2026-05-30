@@ -328,3 +328,55 @@ def integrate_contextually(old_content: str, new_text: str) -> str:
     result = re.sub(r'^```[a-zA-Z0-9]*\n', '', result)
     result = re.sub(r'\n```$', '', result)
     return result.strip()
+
+
+def expand_search_query(query: str) -> list:
+    """Генерирует 3 альтернативных/синонимичных формулировки поискового запроса пользователя через LLM.
+    
+    Для улучшения семантического векторного поиска в Pinecone.
+    """
+    if not query:
+        return []
+        
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {OPENAI_API_KEY}"}
+    
+    system_prompt = (
+        "Ты — умный ИИ-помощник для расширения поисковых запросов в RAG-системе.\n"
+        "Твоя задача — сгенерировать ровно 3 альтернативных синонимичных формулировки или "
+        "связанных ключевых слова по смыслу исходного запроса на том же языке.\n"
+        "Правила:\n"
+        "1. Возвращай строго список расширенных запросов через запятую.\n"
+        "2. Не добавляй никаких объяснений, нумерации списков или вводных фраз.\n"
+        "3. Генерируй только точные синонимы, связанные понятия или переводы (если уместно), без свободных ассоциаций.\n"
+        "Пример: 'рецепт пасты' -> 'итальянские блюда, как приготовить спагетти, макароны рецепты'"
+    )
+    
+    data = {
+        "model": "gpt-5.4-nano", 
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Исходный запрос: '{query}'"}
+        ],
+        "temperature": 0.2
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT)
+        response.raise_for_status()
+        text = response.json()['choices'][0]['message']['content'].strip()
+        
+        # Парсим через запятые
+        synonyms = [s.strip() for s in text.split(",") if s.strip()]
+        # Возвращаем исходный запрос первым в списке
+        results = [query]
+        for syn in synonyms:
+            # Очищаем от кавычек если ИИ вернул их
+            syn_clean = syn.replace("'", "").replace('"', '').strip()
+            if syn_clean.lower() != query.lower() and syn_clean not in results:
+                results.append(syn_clean)
+        return results[:4] # Исходный запрос + до 3 синонимов
+    except Exception as e:
+        print(f"[ai.py] Ошибка расширения поискового запроса: {e}")
+        return [query]
+
