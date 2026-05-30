@@ -21,7 +21,8 @@ from services.notion import (
     get_page_preview,
     rename_page,
     replace_page_content,
-    get_latest_notes
+    get_latest_notes,
+    search_notion_pages
 )
 from services.calendar import create_google_calendar_event
 from services.state import (
@@ -189,21 +190,76 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
             return
         
         elif state_type == 'awaiting_search':
-            query = message.get('text', '').strip()
+            is_audio_msg = False
+            aud_file_id = None
+            if 'voice' in message:
+                is_audio_msg = True
+                aud_file_id = message['voice']['file_id']
+            elif 'audio' in message:
+                is_audio_msg = True
+                aud_file_id = message['audio']['file_id']
+            elif 'video_note' in message:
+                is_audio_msg = True
+                aud_file_id = message['video_note']['file_id']
+            elif 'video' in message:
+                is_audio_msg = True
+                aud_file_id = message['video']['file_id']
+            elif 'document' in message:
+                mime_type = message['document'].get('mime_type', '')
+                if mime_type.startswith('audio/') or mime_type.startswith('video/'):
+                    is_audio_msg = True
+                    aud_file_id = message['document']['file_id']
+
+            query = ""
+            if is_audio_msg and aud_file_id:
+                send_telegram_message(chat_id, "⏳ Расшифровываю голосовой запрос...")
+                try:
+                    audio_bytes = download_telegram_file(aud_file_id).read()
+                    transcript_data = transcribe_with_assemblyai(audio_bytes)
+                    query = transcript_data.get('text', '').strip() if transcript_data else ""
+                except Exception as ae:
+                    print(f"Ошибка голосового поиска: {ae}")
+                    send_telegram_message(chat_id, f"❌ Ошибка расшифровки голоса: {ae}", show_keyboard=True)
+                    set_user_state(user_id, None, None)
+                    return
+            else:
+                query = message.get('text', '').strip()
+
             if query:
                 send_telegram_message(chat_id, f"🧠 Ищу по смыслу: *{query}*...")
+                
+                # 1. Семантический поиск по Pinecone
                 found_ids = query_pinecone(query, top_k=6)
+                
+                # 2. Точный поиск по Notion (Гибридный поиск)
+                try:
+                    notion_results = search_notion_pages(query)
+                    notion_ids = [page['id'] for page in notion_results if 'id' in page]
+                    for nid in notion_ids:
+                        if nid not in found_ids:
+                            found_ids.append(nid)
+                except Exception as ne:
+                    print(f"Ошибка точного поиска в Notion: {ne}")
                 
                 if not found_ids:
                     send_telegram_message(chat_id, "😔 Ничего не найдено.", show_keyboard=True)
                 else:
                     context = ""
                     errors = []
+                    source_buttons = []
+                    
                     for page_id in found_ids:
                         try:
                             page_content = get_notion_page_content(page_id)
                             page_title = page_content.split('\n', 1)[0] if page_content else "Без названия"
+                            # Очищаем заголовок от markdown-символов
+                            page_title = re.sub(r'^[#*_\s]+', '', page_title).strip()
+                            button_title = (page_title[:20] + '..') if len(page_title) > 20 else page_title
+                            
                             context += f"--- Текст из заметки '{page_title}' ---\n{page_content}\n\n"
+                            
+                            # Добавляем кнопку к источнику
+                            source_buttons.append({"text": f"📖 {button_title}", "callback_data": f"note_menu_{page_id}"})
                         except Exception as e:
                             err_desc = f"Page `{page_id}`: `{e}`"
                             if hasattr(e, 'response') and e.response is not None:
@@ -219,12 +275,18 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
                     
                     if context:
                         answer = summarize_for_search(context, query)
-                        send_telegram_message(chat_id, f"💡 *Вот что я нашел:*\n\n{answer}", show_keyboard=True)
+                        
+                        # Группируем кнопки-источники в ряды по 2 кнопки
+                        inline_buttons = []
+                        for i in range(0, len(source_buttons), 2):
+                            inline_buttons.append(source_buttons[i:i+2])
+                            
+                        send_message_with_buttons(chat_id, f"💡 *Вот что я нашел:*\n\n{answer}", inline_buttons, show_keyboard=True)
                     else:
                         err_text = "\n".join(errors)
                         send_telegram_message(chat_id, f"🤔 Нашел заметки, но не смог прочитать.\n\n*Ошибки:*\n{err_text}", show_keyboard=True)
             else:
-                send_telegram_message(chat_id, "Отмена. Пустой запрос.")
+                send_telegram_message(chat_id, "Отмена. Пустой запрос.", show_keyboard=True)
             set_user_state(user_id, None, None)
             return
 

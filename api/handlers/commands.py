@@ -12,7 +12,8 @@ from services.notion import (
     get_latest_notes,
     get_notion_page_content,
     get_page_title,
-    get_page_preview
+    get_page_preview,
+    search_notion_pages
 )
 from services.pinecone_svc import (
     upsert_to_pinecone,
@@ -231,7 +232,19 @@ def handle_command(chat_id: int, user_id: str, text: str, message: dict) -> bool
             return True
             
         send_telegram_message(chat_id, f"🧠 Ищу по смыслу: *{query}*...")
+        
+        # 1. Семантический поиск по Pinecone
         found_ids = query_pinecone(query, top_k=6)
+        
+        # 2. Точный поиск по Notion (Гибридный поиск)
+        try:
+            notion_results = search_notion_pages(query)
+            notion_ids = [page['id'] for page in notion_results if 'id' in page]
+            for nid in notion_ids:
+                if nid not in found_ids:
+                    found_ids.append(nid)
+        except Exception as ne:
+            print(f"Ошибка точного поиска в Notion: {ne}")
         
         if not found_ids:
             send_telegram_message(chat_id, "😔 Ничего не найдено по вашему запросу.")
@@ -239,11 +252,21 @@ def handle_command(chat_id: int, user_id: str, text: str, message: dict) -> bool
 
         context = ""
         errors = []
+        source_buttons = []
+        import re
+        
         for page_id in found_ids:
             try:
                 page_content = get_notion_page_content(page_id)
                 page_title = page_content.split('\n', 1)[0] if page_content else "Без названия"
+                # Очищаем заголовок от markdown-символов
+                page_title = re.sub(r'^[#*_\s]+', '', page_title).strip()
+                button_title = (page_title[:20] + '..') if len(page_title) > 20 else page_title
+                
                 context += f"--- Текст из заметки '{page_title}' ---\n{page_content}\n\n"
+                
+                # Добавляем кнопку к источнику
+                source_buttons.append({"text": f"📖 {button_title}", "callback_data": f"note_menu_{page_id}"})
             except Exception as e:
                 err_desc = f"Page `{page_id}`: `{e}`"
                 if hasattr(e, 'response') and e.response is not None:
@@ -264,7 +287,13 @@ def handle_command(chat_id: int, user_id: str, text: str, message: dict) -> bool
 
         answer = summarize_for_search(context, query)
         final_response = f"💡 *Вот что я нашел по вашему запросу:*\n\n{answer}"
-        send_telegram_message(chat_id, final_response)
+        
+        # Группируем кнопки-источники в ряды по 2 кнопки
+        inline_buttons = []
+        for i in range(0, len(source_buttons), 2):
+            inline_buttons.append(source_buttons[i:i+2])
+            
+        send_message_with_buttons(chat_id, final_response, inline_buttons)
         return True
 
     elif text_clean.startswith('/debug_search '):
