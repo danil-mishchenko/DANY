@@ -2,7 +2,7 @@
 """Message Handler for Telegram Bot."""
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 from services.telegram import (
     send_telegram_message,
@@ -301,7 +301,6 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
                         meta = get_note_metadata(pid)
                         if meta and meta.get('last_edited_time'):
                             try:
-                                from datetime import datetime
                                 dt_str = meta['last_edited_time'].replace('Z', '+00:00')
                                 note_meta_dates[pid] = datetime.fromisoformat(dt_str)
                             except Exception as de:
@@ -322,7 +321,6 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
                     if has_temporal:
                         try:
                             import pytz
-                            from datetime import datetime, timezone, timedelta
                             from utils.config import USER_TIMEZONE
                             tz = pytz.timezone(USER_TIMEZONE)
                             now = datetime.now(tz)
