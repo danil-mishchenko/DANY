@@ -193,7 +193,7 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
             query = message.get('text', '').strip()
             if query:
                 send_telegram_message(chat_id, f"🧠 Ищу по смыслу: *{query}*...")
-                found_ids = query_pinecone(query, top_k=3)
+                found_ids = query_pinecone(query, top_k=6)
                 
                 if not found_ids:
                     send_telegram_message(chat_id, "😔 Ничего не найдено.", show_keyboard=True)
@@ -206,6 +206,13 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
                             context += f"--- Текст из заметки '{page_title}' ---\n{page_content}\n\n"
                         except Exception as e:
                             print(f"Не удалось получить контент для страницы {page_id}: {e}")
+                            if hasattr(e, 'response') and e.response is not None:
+                                if getattr(e.response, 'status_code', None) in (400, 403, 404):
+                                    try:
+                                        from services.pinecone_svc import delete_from_pinecone
+                                        delete_from_pinecone(page_id)
+                                    except Exception as pe:
+                                        print(f"Не удалось очистить Pinecone для {page_id}: {pe}")
                     
                     if context:
                         answer = summarize_for_search(context, query)

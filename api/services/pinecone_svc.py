@@ -72,3 +72,13 @@ def query_pinecone(query_text: str, top_k: int = 3):
     except Exception as e:
         print(f"ОШИБКА ПОИСКА В PINECONE: {e}")
         return []
+
+
+def delete_from_pinecone(page_id: str):
+    """Удаляет вектор страницы из Pinecone."""
+    try:
+        print(f"Удаляю вектор страницы {page_id} из Pinecone...")
+        _get_pinecone_index().delete(ids=[page_id])
+        print(f"Вектор страницы {page_id} успешно удален из Pinecone.")
+    except Exception as e:
+        print(f"ОШИБКА УДАЛЕНИЯ ИЗ PINECONE: {e}")
