@@ -89,7 +89,7 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
     if raw_text.lower().startswith("дд "):
         command_body = raw_text[3:].strip()
         if command_body:
-            from services.state import redis_client, log_last_action
+            from services.state import redis_client
             
             # Redis Lock для предотвращения одновременных изменений
             lock_key = f"dany:user:{user_id}:write_lock"
