@@ -17,7 +17,8 @@ from services.notion import (
 from services.pinecone_svc import (
     upsert_to_pinecone,
     query_pinecone,
-    delete_from_pinecone
+    delete_from_pinecone,
+    clear_pinecone_index
 )
 from services.state import (
     get_last_created_page_id,
@@ -58,6 +59,7 @@ def handle_command(chat_id: int, user_id: str, text: str, message: dict) -> bool
             "👋 /start — Начало работы и клавиатура\n"
             "📝 /notes — Последние 5 заметок в Notion\n"
             "🔍 /search <запрос> — Поиск по смыслу в заметках\n"
+            "🧹 /reindex — Очистить и переиндексировать всё с нуля\n"
             "📋 /clickup — Показать задачи из ClickUp\n"
             "⏳ /briefing — Утренний брифинг\n"
             "⏳ /evening — Вечерний отчёт\n"
@@ -69,15 +71,33 @@ def handle_command(chat_id: int, user_id: str, text: str, message: dict) -> bool
         send_telegram_message(chat_id, help_msg, show_keyboard=True)
         return True
 
-    # 3. /index_all
-    elif text_clean == '/index_all':
-        send_telegram_message(chat_id, "Начинаю полную индексацию всех заметок. Это может занять время...")
+    # 3. /index_all или /reindex
+    elif text_clean in ('/index_all', '/reindex'):
+        is_reindex = text_clean == '/reindex'
+        if is_reindex:
+            send_telegram_message(chat_id, "🧹 Очищаю старый индекс поиска...")
+            clear_pinecone_index()
+            send_telegram_message(chat_id, "⏳ Начинаю полную переиндексацию с нуля. Это может занять время...")
+        else:
+            send_telegram_message(chat_id, "⏳ Начинаю обновление индексации заметок...")
+            
         all_notes = get_latest_notes(100)
+        indexed_count = 0
         for note in all_notes:
             page_id = note['id']
-            page_content = get_notion_page_content(page_id)
-            upsert_to_pinecone(page_id, page_content)
-        send_telegram_message(chat_id, f"✅ Готово! Проиндексировано {len(all_notes)} заметок.", show_keyboard=True)
+            try:
+                page_content = get_notion_page_content(page_id)
+                title_parts = note.get('properties', {}).get('Name', {}).get('title', [])
+                page_title = title_parts[0]['plain_text'] if title_parts else "Без названия"
+                
+                # Векторизуем заголовок + содержимое для максимального качества поиска!
+                full_text = f"Заголовок: {page_title}\nСодержимое: {page_content}"
+                upsert_to_pinecone(page_id, full_text)
+                indexed_count += 1
+            except Exception as e:
+                print(f"Ошибка при индексации страницы {page_id}: {e}")
+                
+        send_telegram_message(chat_id, f"✅ Успешно! Проиндексировано {indexed_count} заметок.", show_keyboard=True)
         return True
         
     # 4. /briefing

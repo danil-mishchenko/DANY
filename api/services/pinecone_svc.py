@@ -82,3 +82,16 @@ def delete_from_pinecone(page_id: str):
         print(f"Вектор страницы {page_id} успешно удален из Pinecone.")
     except Exception as e:
         print(f"ОШИБКА УДАЛЕНИЯ ИЗ PINECONE: {e}")
+
+
+def clear_pinecone_index():
+    """Полностью очищает весь индекс Pinecone (удаляет все векторы)."""
+    try:
+        print("Очищаю весь индекс Pinecone...")
+        _get_pinecone_index().delete(delete_all=True)
+        print("Индекс Pinecone успешно полностью очищен.")
+        return True
+    except Exception as e:
+        print(f"ОШИБКА ПОЛНОЙ ОЧИСТКИ PINECONE: {e}")
+        return False
+
