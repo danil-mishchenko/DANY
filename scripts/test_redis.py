@@ -31,9 +31,6 @@ from services.state import (
     clear_hidden_tasks,
     get_user_settings,
     set_user_settings,
-    get_user_xp,
-    set_user_xp,
-    add_user_xp,
     save_temp_transcript,
     get_temp_transcript,
     get_transcript_buffer,
@@ -132,29 +129,7 @@ def run_tests():
     assert get_hidden_tasks(user_id) == [], "Список скрытых задач не очистился"
     print("   [OK] Очистка скрытых задач проверена.")
 
-    # --- 6. ТЕСТ: RPG XP Система ---
-    print("\n⚔️ 6. RPG XP Система:")
-    # Проверка получения XP (совместимость)
-    xp_data = get_user_xp(user_id)
-    assert xp_data.get('xp') == 0, "Дефолтный XP должен быть 0"
-    assert xp_data.get('level') == 1, "Дефолтный Level должен быть 1"
-    
-    # Проверка поведения XPDataDict как int (по ТЗ)
-    assert int(xp_data) == 0, "XPDataDict не приводится к int 0"
-    
-    # Установка XP в виде dict (clickup_webhook.py совместимость)
-    set_user_xp(user_id, {'xp': 120, 'level': 2})
-    xp_data2 = get_user_xp(user_id)
-    assert xp_data2.get('xp') == 120, "Ошибка установки XP через dict"
-    assert xp_data2.get('level') == 2, "Ошибка установки Level через dict"
-    assert int(xp_data2) == 120, "XPDataDict не приводится к int 120"
-    print("   [OK] Установка XP через dict и приведение к int проверено.")
 
-    # Увеличение XP
-    add_user_xp(user_id, 30)
-    xp_data3 = get_user_xp(user_id)
-    assert xp_data3.get('xp') == 150, f"Ошибка инкремента XP, ожидалось 150, получено: {xp_data3.get('xp')}"
-    print(f"   [OK] Инкремент XP проверен: {xp_data3}")
 
     # --- 7. ТЕСТ: Временные транскрипты ---
     print("\n💾 7. Временные транскрипты:")
@@ -212,6 +187,28 @@ def run_tests():
     
     assert get_and_delete_last_log(user_id) is None, "Лог действий должен быть пуст"
     print("   [OK] Логирование, отмена действий и поиск последней страницы проверены.")
+
+    # --- 10. ТЕСТ: Кэширование Notion и расширенный Undo ---
+    print("\n🎯 10. Кэширование заметок и расширенный Undo:")
+    from services.state import get_notes_cache, set_notes_cache, invalidate_notes_cache
+    
+    # Кэширование
+    mock_notes = [{"id": "page_1", "title": "Заметка 1"}, {"id": "page_2", "title": "Заметка 2"}]
+    set_notes_cache(user_id, mock_notes)
+    cached = get_notes_cache(user_id)
+    assert cached == mock_notes, "Ошибка чтения кэша заметок"
+    print("   [OK] Запись и чтение кэша заметок проверены.")
+    
+    invalidate_notes_cache(user_id)
+    assert get_notes_cache(user_id) is None, "Ошибка очистки кэша заметок"
+    print("   [OK] Сброс кэша заметок проверен.")
+    
+    # Расширенный Undo
+    log_last_action(user_id, action="edit", notion_page_id="page_123", old_markdown="Оригинальный текст")
+    last_act = get_and_delete_last_log(user_id)
+    assert last_act['action'] == "edit", "Неверный тип действия"
+    assert last_act['old_markdown'] == "Оригинальный текст", "Ошибка сохранения old_markdown"
+    print("   [OK] Сохранение и извлечение old_markdown для Undo проверено.")
 
     print("\n" + "=" * 60)
     print("🎉 ВСЕ ТЕСТЫ ПРОЙДЕНЫ УСПЕШНО!")

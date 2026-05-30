@@ -34,7 +34,8 @@ from services.state import (
     get_hidden_tasks,
     set_hidden_tasks,
     add_hidden_task,
-    set_user_settings
+    set_user_settings,
+    log_last_action
 )
 from services.calendar import delete_gcal_event
 from services.clickup import get_my_tasks, format_tasks_message
@@ -51,11 +52,38 @@ def handle_callback(chat_id: int, user_id: str, callback_query_id: str, callback
         answer_callback_query(callback_query_id)
         last_action = get_and_delete_last_log()
         if last_action:
-            if last_action.get('notion_page_id'): 
-                delete_notion_page(last_action['notion_page_id'])
-            if last_action.get('gcal_event_id') and last_action.get('gcal_calendar_id'): 
-                delete_gcal_event(last_action['gcal_calendar_id'], last_action['gcal_event_id'])
-            send_telegram_message(chat_id, "✅ Последнее действие отменено.")
+            from datetime import datetime
+            timestamp_str = last_action.get('timestamp')
+            if timestamp_str:
+                try:
+                    elapsed = (datetime.now() - datetime.fromisoformat(timestamp_str)).total_seconds()
+                    if elapsed > 120:
+                        send_telegram_message(chat_id, "⏳ Время для отмены действия истекло (лимит 120 секунд).")
+                        return
+                except Exception as time_err:
+                    print(f"Ошибка проверки времени Undo: {time_err}")
+            
+            action_type = last_action.get('action')
+            if action_type == 'edit' and last_action.get('notion_page_id') and last_action.get('old_markdown'):
+                try:
+                    replace_page_content(last_action['notion_page_id'], last_action['old_markdown'])
+                    send_telegram_message(chat_id, "✅ Последнее изменение заметки отменено.")
+                except Exception as e:
+                    send_telegram_message(chat_id, f"❌ Ошибка отмены изменения: {e}")
+            elif last_action.get('notion_page_id'): 
+                try:
+                    delete_notion_page(last_action['notion_page_id'])
+                    send_telegram_message(chat_id, "✅ Созданная заметка удалена.")
+                except Exception as e:
+                    send_telegram_message(chat_id, f"❌ Ошибка удаления заметки: {e}")
+            elif last_action.get('gcal_event_id') and last_action.get('gcal_calendar_id'): 
+                try:
+                    delete_gcal_event(last_action['gcal_calendar_id'], last_action['gcal_event_id'])
+                    send_telegram_message(chat_id, "✅ Календарное событие удалено.")
+                except Exception as e:
+                    send_telegram_message(chat_id, f"❌ Ошибка удаления события: {e}")
+            else:
+                send_telegram_message(chat_id, "✅ Последнее действие отменено.")
         else:
             send_telegram_message(chat_id, "🤔 Не найдено действий для отмены.")
     
@@ -191,9 +219,12 @@ def handle_callback(chat_id: int, user_id: str, callback_query_id: str, callback
         if user_state and user_state.get('pending_edit_text'):
             text_to_add = user_state['pending_edit_text']
             try:
+                old_content = get_notion_page_content(page_id)
+                log_last_action(user_id=user_id, action='edit', notion_page_id=page_id, old_markdown=old_content)
                 add_to_notion_page(page_id, text_to_add)
                 title = get_page_title(page_id)
-                send_telegram_message(chat_id, f"✅ Добавлено в *{title}*", show_keyboard=True)
+                buttons = [[{"text": "↩️ Отменить действие", "callback_data": "undo_last_action"}]]
+                send_telegram_message(chat_id, f"✅ Добавлено в *{title}*", inline_buttons=buttons, show_keyboard=True)
             except Exception as e:
                 send_telegram_message(chat_id, f"❌ Ошибка: {e}")
             set_user_state(str(chat_id), None, None)  # Очищаем state
@@ -208,12 +239,14 @@ def handle_callback(chat_id: int, user_id: str, callback_query_id: str, callback
         if user_state and user_state.get('pending_edit_text'):
             new_text = user_state['pending_edit_text']
             try:
-                send_telegram_message(chat_id, "✨ Полирую текст...")
+                send_telegram_message(chat_id, "⏳ Полирую текст...")
                 old_content = get_notion_page_content(page_id)
+                log_last_action(user_id=user_id, action='edit', notion_page_id=page_id, old_markdown=old_content)
                 polished = polish_content(old_content, new_text)
                 replace_page_content(page_id, polished)
                 title = get_page_title(page_id)
-                send_telegram_message(chat_id, f"✅ *{title}* обновлена и отполирована!", show_keyboard=True)
+                buttons = [[{"text": "↩️ Отменить действие", "callback_data": "undo_last_action"}]]
+                send_telegram_message(chat_id, f"✅ *{title}* обновлена и отполирована!", inline_buttons=buttons, show_keyboard=True)
             except Exception as e:
                 send_telegram_message(chat_id, f"❌ Ошибка полировки: {e}")
             set_user_state(str(chat_id), None, None)

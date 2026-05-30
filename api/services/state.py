@@ -22,25 +22,13 @@ UPSTASH_REDIS_REST_TOKEN = os.environ.get('UPSTASH_REDIS_REST_TOKEN')
 DEFAULT_SETTINGS = {
     'reminder_minutes': 15,
     'hidden_tasks': [],
-    'xp': 0,
-    'level': 1,
     'active_mode': 'note',
     'transcript_clean': False,
     'transcript_single_mode': False
 }
 
 
-class XPDataDict(dict):
-    """Wrapper class for XP data.
-    
-    Behaves as a dict for compatibility with existing codebase (bot.py, clickup_webhook.py),
-    but can be cast to int (e.g. int(xp_data)) to return the raw XP value.
-    """
-    def __int__(self) -> int:
-        return self.get('xp', 0)
-    
-    def __str__(self) -> str:
-        return str(self.get('xp', 0))
+
 
 
 class InMemoryRedis:
@@ -281,34 +269,7 @@ def set_user_settings(user_id: str, settings_dict: Union[dict, int]):
         print(f"[state.py] Error writing settings to Redis for {user_id}: {e}")
 
 
-# === 6. RPG XP SYSTEM ===
 
-def get_user_xp(user_id: str) -> XPDataDict:
-    """Returns XP and Level of the user wrapped in XPDataDict."""
-    settings = get_user_settings(user_id)
-    return XPDataDict({
-        'xp': settings.get('xp', 0),
-        'level': settings.get('level', 1)
-    })
-
-
-def set_user_xp(user_id: str, xp: Union[dict, int]):
-    """Sets XP data for the user."""
-    settings = get_user_settings(user_id)
-    if isinstance(xp, dict):
-        settings['xp'] = xp.get('xp', 0)
-        settings['level'] = xp.get('level', 1)
-    else:
-        settings['xp'] = xp
-    set_user_settings(user_id, settings)
-
-
-def add_user_xp(user_id: str, amount: int):
-    """Increments user's XP by a specified amount."""
-    settings = get_user_settings(user_id)
-    current_xp = settings.get('xp', 0)
-    settings['xp'] = current_xp + amount
-    set_user_settings(user_id, settings)
 
 
 # === 7. TEMP TRANSCRIPTS ===
@@ -377,7 +338,7 @@ def clear_transcript_buffer(user_id: str):
 
 # === 9. ACTION LOGGING ===
 
-def log_last_action(user_id: str = None, action: str = None, page_id: str = None, notion_page_id: str = None, gcal_event_id: str = None, properties: dict = None):
+def log_last_action(user_id: str = None, action: str = None, page_id: str = None, notion_page_id: str = None, gcal_event_id: str = None, properties: dict = None, old_markdown: str = None):
     """Logs the last user action (Notion page or Calendar event).
     
     Compatible both with notion.py (taking properties) and new state API format.
@@ -399,6 +360,7 @@ def log_last_action(user_id: str = None, action: str = None, page_id: str = None
         'gcal_event_id': gcal_event_id,
         'gcal_calendar_id': default_cal_id or "primary",
         'action': action,
+        'old_markdown': old_markdown,
         'timestamp': datetime.now().isoformat()
     }
     
@@ -461,3 +423,39 @@ def get_last_created_page_id(user_id: str = None) -> Optional[str]:
     except Exception as e:
         print(f"[state.py] Error fetching last page ID: {e}")
     return None
+
+
+# === 10. NOTION NOTES CACHE ===
+
+def get_notes_cache(user_id: str) -> Optional[list]:
+    """Возвращает кэш последних заметок Notion для пользователя."""
+    user_id = str(user_id)
+    key = f"dany:user:{user_id}:notes_cache"
+    try:
+        data = redis_client.get(key)
+        if data:
+            return json.loads(data)
+    except Exception as e:
+        print(f"[state.py] Error fetching notes cache: {e}")
+    return None
+
+
+def set_notes_cache(user_id: str, notes: list):
+    """Сохраняет последние заметки в кэш с TTL 1 час."""
+    user_id = str(user_id)
+    key = f"dany:user:{user_id}:notes_cache"
+    try:
+        redis_client.setex(key, 3600, json.dumps(notes, ensure_ascii=False))
+    except Exception as e:
+        print(f"[state.py] Error setting notes cache: {e}")
+
+
+def invalidate_notes_cache(user_id: str):
+    """Сбрасывает кэш заметок Notion для пользователя."""
+    user_id = str(user_id)
+    key = f"dany:user:{user_id}:notes_cache"
+    try:
+        redis_client.delete(key)
+        print(f"[state.py] Notes cache invalidated for {user_id}")
+    except Exception as e:
+        print(f"[state.py] Error invalidating notes cache: {e}")

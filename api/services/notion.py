@@ -43,6 +43,18 @@ def get_data_source_id() -> str:
 
 def get_latest_notes(limit: int = 5):
     """Запрашивает у Notion последние N страниц из основной базы данных."""
+    from utils.config import ALLOWED_TELEGRAM_ID
+    from services.state import get_notes_cache, set_notes_cache
+    
+    if limit <= 5 and ALLOWED_TELEGRAM_ID:
+        try:
+            cached_notes = get_notes_cache(ALLOWED_TELEGRAM_ID)
+            if cached_notes and len(cached_notes) >= limit:
+                print(f"[notion.py] Cache HIT for get_latest_notes(limit={limit})")
+                return cached_notes[:limit]
+        except Exception as cache_err:
+            print(f"[notion.py] Error reading notes cache: {cache_err}")
+
     ds_id = get_data_source_id()
     url = f"https://api.notion.com/v1/data_sources/{ds_id}/query"
     payload = {
@@ -56,7 +68,16 @@ def get_latest_notes(limit: int = 5):
     }
     response = requests.post(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
-    return response.json().get('results', [])
+    results = response.json().get('results', [])
+    
+    if limit >= 5 and ALLOWED_TELEGRAM_ID:
+        try:
+            set_notes_cache(ALLOWED_TELEGRAM_ID, results)
+            print(f"[notion.py] Cached {len(results)} notes in Redis.")
+        except Exception as cache_err:
+            print(f"[notion.py] Error writing notes cache: {cache_err}")
+            
+    return results
 
 
 def search_notion_pages(query: str):
@@ -126,6 +147,14 @@ def create_notion_page(title: str, formatted_content: str, category: str) -> str
     print(f"Страница {page_id} успешно создана в Notion через Markdown API.")
 
     try:
+        from utils.config import ALLOWED_TELEGRAM_ID
+        from services.state import invalidate_notes_cache
+        if ALLOWED_TELEGRAM_ID:
+            invalidate_notes_cache(ALLOWED_TELEGRAM_ID)
+    except Exception as cache_err:
+        print(f"Ошибка инвалидации кэша при создании: {cache_err}")
+
+    try:
         import threading
         full_text_for_embedding = f"Заголовок: {title}\nСодержимое: {formatted_content}"
         t = threading.Thread(target=upsert_to_pinecone, args=(page_id, full_text_for_embedding))
@@ -150,6 +179,14 @@ def delete_notion_page(page_id: str):
     response = requests.patch(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
     print(f"Страница Notion {page_id} удалена (перемещена в корзину).")
+    
+    try:
+        from utils.config import ALLOWED_TELEGRAM_ID
+        from services.state import invalidate_notes_cache
+        if ALLOWED_TELEGRAM_ID:
+            invalidate_notes_cache(ALLOWED_TELEGRAM_ID)
+    except Exception as cache_err:
+        print(f"Ошибка инвалидации кэша при удалении: {cache_err}")
 
 
 def restore_notion_page(page_id: str):
@@ -164,6 +201,14 @@ def restore_notion_page(page_id: str):
     response = requests.patch(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
     print(f"Страница Notion {page_id} восстановлена из корзины.")
+    
+    try:
+        from utils.config import ALLOWED_TELEGRAM_ID
+        from services.state import invalidate_notes_cache
+        if ALLOWED_TELEGRAM_ID:
+            invalidate_notes_cache(ALLOWED_TELEGRAM_ID)
+    except Exception as cache_err:
+        print(f"Ошибка инвалидации кэша при восстановлении: {cache_err}")
 
 
 def add_to_notion_page(page_id: str, text_to_add: str):
@@ -187,6 +232,14 @@ def add_to_notion_page(page_id: str, text_to_add: str):
     response = requests.patch(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
     print(f"Текст успешно добавлен в конец страницы {page_id} через Markdown API.")
+    
+    try:
+        from utils.config import ALLOWED_TELEGRAM_ID
+        from services.state import invalidate_notes_cache
+        if ALLOWED_TELEGRAM_ID:
+            invalidate_notes_cache(ALLOWED_TELEGRAM_ID)
+    except Exception as cache_err:
+        print(f"Ошибка инвалидации кэша при добавлении: {cache_err}")
 
 
 def add_image_to_page(page_id: str, image_url: str, caption: str = None):
@@ -253,6 +306,14 @@ def replace_page_content(page_id: str, new_content: str):
     response = requests.patch(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
     print(f"Контент страницы {page_id} успешно атомарно перезаписан через Markdown API.")
+    
+    try:
+        from utils.config import ALLOWED_TELEGRAM_ID
+        from services.state import invalidate_notes_cache
+        if ALLOWED_TELEGRAM_ID:
+            invalidate_notes_cache(ALLOWED_TELEGRAM_ID)
+    except Exception as cache_err:
+        print(f"Ошибка инвалидации кэша при замене контента: {cache_err}")
 
 
 def rename_page(page_id: str, new_title: str):
@@ -271,3 +332,11 @@ def rename_page(page_id: str, new_title: str):
     response = requests.patch(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
     print(f"Страница {page_id} переименована в '{new_title}'")
+    
+    try:
+        from utils.config import ALLOWED_TELEGRAM_ID
+        from services.state import invalidate_notes_cache
+        if ALLOWED_TELEGRAM_ID:
+            invalidate_notes_cache(ALLOWED_TELEGRAM_ID)
+    except Exception as cache_err:
+        print(f"Ошибка инвалидации кэша при переименовании: {cache_err}")

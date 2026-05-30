@@ -10,49 +10,10 @@ from utils.config import (
     NOTION_TOKEN, NOTION_DATABASE_ID, ALLOWED_TELEGRAM_ID
 )
 from services.clickup import get_my_tasks, _escape_markdown, PRIORITY_EMOJI
-from services.state import get_hidden_tasks, get_user_xp, set_user_xp
+from services.state import get_hidden_tasks
 
 
-# === RPG XP СИСТЕМА ===
-XP_PER_PRIORITY = {"urgent": 50, "high": 30, "normal": 15, "low": 10, "none": 5}
 
-RPG_LEVELS = [
-    (0, "🐀 Крестьянин"),
-    (50, "🗡️ Оруженосец"),
-    (150, "⚔️ Пехотинец"),
-    (300, "🏹 Лучник"),
-    (500, "🛡️ Рыцарь"),
-    (750, "⚜️ Паладин"),
-    (1050, "🐴 Конный Рыцарь"),
-    (1400, "🏰 Комендант Крепости"),
-    (1800, "🦁 Рыцарь Ордена"),
-    (2300, "📜 Магистр"),
-    (2900, "🗺️ Полководец"),
-    (3600, "👑 Барон"),
-    (4400, "🏛️ Граф"),
-    (5300, "🦅 Герцог"),
-    (6300, "⚔️👑 Великий Герцог"),
-    (7500, "🔱 Принц"),
-    (9000, "👸 Регент"),
-    (11000, "🏰👑 Король"),
-    (13500, "🌟 Император"),
-    (16500, "🐉 Легенда"),
-]
-
-
-def get_rpg_level(xp: int) -> tuple:
-    """Возвращает (название уровня, xp до следующего)."""
-    current_level = RPG_LEVELS[0]
-    next_threshold = RPG_LEVELS[1][0] if len(RPG_LEVELS) > 1 else None
-    
-    for i, (threshold, name) in enumerate(RPG_LEVELS):
-        if xp >= threshold:
-            current_level = (threshold, name)
-            next_threshold = RPG_LEVELS[i + 1][0] if i + 1 < len(RPG_LEVELS) else None
-        else:
-            break
-    
-    return current_level[1], next_threshold
 
 
 def get_today_events() -> list:
@@ -217,10 +178,7 @@ def build_morning_briefing() -> str:
     urgent_tasks = get_urgent_tasks(hidden_ids)
     last_note = get_last_notion_note()
 
-    # XP
-    xp_data = get_user_xp(user_id) if user_id else {'xp': 0, 'level': 1}
-    current_xp = xp_data.get('xp', 0)
-    rpg_title, next_threshold = get_rpg_level(current_xp)
+
 
     # Header
     weekdays = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
@@ -231,10 +189,7 @@ def build_morning_briefing() -> str:
     lines = []
     lines.append(f"<b>🌅 Погнали, Шеф!</b>")
     lines.append(f"<i>{day_name}, {date_str}  •  День #{day_of_year}</i>")
-    xp_line = f"<i>{rpg_title}  •  {current_xp} XP</i>"
-    if next_threshold:
-        xp_line += f" <i>(до след: {next_threshold - current_xp})</i>"
-    lines.append(xp_line)
+
     lines.append("")
 
     # КАЛЕНДАРЬ
@@ -316,10 +271,7 @@ def build_evening_briefing() -> str:
         all_tasks = [t for t in all_tasks if t.get('id', '') not in hidden_ids]
     urgent_tasks = get_urgent_tasks(hidden_ids)
 
-    # XP
-    xp_data = get_user_xp(user_id) if user_id else {'xp': 0, 'level': 1}
-    current_xp = xp_data.get('xp', 0)
-    rpg_title, _ = get_rpg_level(current_xp)
+
 
     weekdays = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
     day_name = weekdays[now.weekday()]
@@ -327,7 +279,7 @@ def build_evening_briefing() -> str:
     lines = []
     lines.append("<b>🌙 Итоги дня, Шеф</b>")
     lines.append(f"<i>{day_name}, {now.strftime('%d.%m.%Y')}</i>")
-    lines.append(f"<i>{rpg_title}  •  {current_xp} XP</i>")
+
     lines.append("")
 
     lines.append("–––––––")

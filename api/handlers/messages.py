@@ -84,6 +84,81 @@ def format_with_timecodes(words: list) -> str:
 def handle_message(chat_id: int, user_id: str, text: str, message: dict):
     """Обработка обычных сообщений, состояний ожидания и медиафайлов."""
     
+    # Проверяем команду контекстного ИИ-дополнения "Дд " / "дд "
+    raw_text = text.strip() if text else ""
+    if raw_text.lower().startswith("дд "):
+        command_body = raw_text[3:].strip()
+        if command_body:
+            from services.state import redis_client, log_last_action
+            
+            # Redis Lock для предотвращения одновременных изменений
+            lock_key = f"dany:user:{user_id}:write_lock"
+            if redis_client.get(lock_key):
+                send_telegram_message(chat_id, "⏳ Предыдущее изменение еще обрабатывается. Пожалуйста, подождите...")
+                return
+            
+            redis_client.setex(lock_key, 3, "1")
+            status_id = send_initial_status_message(chat_id, "🔍 Поиск последней заметки...")
+            
+            try:
+                from services.notion import get_latest_notes, replace_page_content, get_notion_page_content, get_page_title
+                from services.ai import integrate_contextually
+                
+                latest_notes = get_latest_notes(1)
+                if not latest_notes:
+                    edit_telegram_message(chat_id, status_id, "❌ Не найдено ни одной заметки для дополнения.")
+                    return
+                
+                note = latest_notes[0]
+                page_id = note['id']
+                title_parts = note.get('properties', {}).get('Name', {}).get('title', [])
+                page_title = title_parts[0]['plain_text'] if title_parts else "Без названия"
+                
+                edit_telegram_message(chat_id, status_id, f"📝 Чтение заметки *{page_title}*...")
+                old_content = get_notion_page_content(page_id)
+                
+                edit_telegram_message(chat_id, status_id, f"✨ Интеграция новой информации с ИИ...")
+                new_content = integrate_contextually(old_content, command_body)
+                
+                # Сохраняем оригинальный контент перед перезаписью!
+                log_last_action(user_id=user_id, action='edit', notion_page_id=page_id, old_markdown=old_content)
+                
+                edit_telegram_message(chat_id, status_id, f"💾 Сохранение изменений в Notion...")
+                replace_page_content(page_id, new_content)
+                
+                # Запускаем Pinecone-векторизацию в фоновом потоке
+                try:
+                    import threading
+                    from services.pinecone_svc import upsert_to_pinecone
+                    full_text_for_embedding = f"Заголовок: {page_title}\nСодержимое: {new_content}"
+                    t = threading.Thread(target=upsert_to_pinecone, args=(page_id, full_text_for_embedding))
+                    t.daemon = True
+                    t.start()
+                    t.join(timeout=0.2)
+                except Exception as pinecone_err:
+                    print(f"Ошибка индексации Pinecone при Дд: {pinecone_err}")
+                
+                buttons = [
+                    [
+                        {"text": "👁️ Просмотр", "callback_data": f"view_page_{page_id}"},
+                        {"text": "✏️ Переименовать", "callback_data": f"rename_page_{page_id}"}
+                    ],
+                    [
+                        {"text": "➕ Добавить", "callback_data": f"add_to_notion_{page_id}"},
+                        {"text": "↩️ Отменить", "callback_data": "undo_last_action"}
+                    ]
+                ]
+                edit_telegram_message(chat_id, status_id, f"✅ Встроено в заметку *{page_title}*!", inline_buttons=buttons)
+            except Exception as dany_err:
+                print(f"Ошибка команды Дд: {dany_err}")
+                edit_telegram_message(chat_id, status_id, f"❌ Ошибка встраивания информации: {dany_err}")
+            finally:
+                try:
+                    redis_client.delete(lock_key)
+                except Exception:
+                    pass
+            return
+    
     # 1. ПРОВЕРКА СОСТОЯНИЯ: не ждем ли мы текст для добавления/переименования/поиска?
     user_state = get_user_state(user_id)
     if user_state:

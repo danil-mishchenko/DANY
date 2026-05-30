@@ -58,7 +58,6 @@ def handle_command(chat_id: int, user_id: str, text: str, message: dict) -> bool
             "📝 /notes — Последние 5 заметок в Notion\n"
             "🔍 /search <запрос> — Поиск по смыслу в заметках\n"
             "📋 /clickup — Показать задачи из ClickUp\n"
-            "⚔️ /xp — Твой игровой профиль и уровень\n"
             "⏳ /briefing — Утренний брифинг\n"
             "⏳ /evening — Вечерний отчёт\n"
             "👁 /hide — Меню скрытия задач ClickUp\n"
@@ -123,18 +122,7 @@ def handle_command(chat_id: int, user_id: str, text: str, message: dict) -> bool
             send_message_with_buttons(chat_id, msg, buttons)
         return True
         
-    # 7. /xp
-    elif text_clean == '/xp':
-        from services.briefing import get_rpg_level
-        from services.state import get_user_xp
-        xp_data = get_user_xp(user_id)
-        xp = xp_data.get('xp', 0)
-        title, next_t = get_rpg_level(xp)
-        msg = f"<b>⚔️ Твой профиль, Шеф</b>\n\n{title}\n<b>{xp} XP</b>"
-        if next_t:
-            msg += f"\nДо след. уровня: {next_t - xp} XP"
-        send_telegram_message(chat_id, msg, use_html=True, show_keyboard=True)
-        return True
+
         
     # 8. /register_webhook
     elif text_clean == '/register_webhook':
