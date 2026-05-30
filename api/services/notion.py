@@ -15,6 +15,16 @@ from utils.config import (
 _data_source_id_cache = None
 
 
+def format_notion_uuid(uuid_str: str) -> str:
+    """Приводит 32-символьный ID страницы Notion к стандартному формату с дефисами (8-4-4-4-12)."""
+    if not uuid_str:
+        return uuid_str
+    clean = uuid_str.replace('-', '').strip()
+    if len(clean) == 32:
+        return f"{clean[:8]}-{clean[8:12]}-{clean[12:16]}-{clean[16:20]}-{clean[20:]}"
+    return uuid_str
+
+
 def get_data_source_id() -> str:
     """Определяет ID источника данных для базы данных Notion (с кэшированием).
     
@@ -103,6 +113,7 @@ def search_notion_pages(query: str):
 
 def get_notion_page_content(page_id: str) -> str:
     """Получает все текстовое содержимое со страницы Notion как Markdown."""
+    page_id = format_notion_uuid(page_id)
     url = f"https://api.notion.com/v1/pages/{page_id}/markdown"
     headers = {
         'Authorization': f'Bearer {NOTION_TOKEN}', 
@@ -169,6 +180,7 @@ def create_notion_page(title: str, formatted_content: str, category: str) -> str
 
 def delete_notion_page(page_id: str):
     """Перемещает страницу в корзину (удаляет) в Notion."""
+    page_id = format_notion_uuid(page_id)
     url = f"https://api.notion.com/v1/pages/{page_id}"
     headers = {
         'Authorization': f'Bearer {NOTION_TOKEN}', 
@@ -191,6 +203,7 @@ def delete_notion_page(page_id: str):
 
 def restore_notion_page(page_id: str):
     """Восстанавливает страницу из корзины в Notion."""
+    page_id = format_notion_uuid(page_id)
     url = f"https://api.notion.com/v1/pages/{page_id}"
     headers = {
         'Authorization': f'Bearer {NOTION_TOKEN}', 
@@ -213,6 +226,7 @@ def restore_notion_page(page_id: str):
 
 def add_to_notion_page(page_id: str, text_to_add: str):
     """Добавляет новый текст в конец страницы с помощью Markdown API."""
+    page_id = format_notion_uuid(page_id)
     url = f"https://api.notion.com/v1/pages/{page_id}/markdown"
     headers = {
         'Authorization': f'Bearer {NOTION_TOKEN}', 
@@ -251,6 +265,7 @@ def add_image_to_page(page_id: str, image_url: str, caption: str = None):
 
 def get_page_title(page_id: str) -> str:
     """Получает заголовок страницы Notion по её ID."""
+    page_id = format_notion_uuid(page_id)
     url = f"https://api.notion.com/v1/pages/{page_id}"
     headers = {
         'Authorization': f'Bearer {NOTION_TOKEN}', 
@@ -289,6 +304,7 @@ def get_page_preview(page_id: str, max_chars: int = 100) -> dict:
 
 def replace_page_content(page_id: str, new_content: str):
     """Заменяет весь контент страницы на новый атомарно через Markdown API."""
+    page_id = format_notion_uuid(page_id)
     url = f"https://api.notion.com/v1/pages/{page_id}/markdown"
     headers = {
         'Authorization': f'Bearer {NOTION_TOKEN}', 
@@ -318,6 +334,7 @@ def replace_page_content(page_id: str, new_content: str):
 
 def rename_page(page_id: str, new_title: str):
     """Переименовывает страницу Notion."""
+    page_id = format_notion_uuid(page_id)
     url = f"https://api.notion.com/v1/pages/{page_id}"
     headers = {
         'Authorization': f'Bearer {NOTION_TOKEN}', 
