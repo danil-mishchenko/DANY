@@ -122,10 +122,14 @@ def send_message_with_buttons(chat_id: str, text: str, inline_buttons: list, use
         print(f"Ошибка при отправке сообщения с кнопками: {e}")
 
 
-def send_initial_status_message(chat_id: str, text: str):
+def send_initial_status_message(chat_id: str, text: str, use_html: bool = False):
     """Отправляет начальное сообщение и возвращает его ID для последующего редактирования."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown'}
+    payload = {
+        'chat_id': chat_id, 
+        'text': text, 
+        'parse_mode': 'HTML' if use_html else 'Markdown'
+    }
     try:
         response = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
         response.raise_for_status()

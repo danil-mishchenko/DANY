@@ -94,8 +94,22 @@ def format_with_timecodes(words: list) -> str:
     return "\n\n".join(formatted)
 
 
+def update_status(chat_id: str, message_id: int, title: str, percentage: int):
+    """Обновляет сообщение-статус с красивым прогресс-баром."""
+    if not message_id:
+        return
+    # Строим прогресс-бар длины 10 из 🟩 и ⬜️
+    filled = max(0, min(10, percentage // 10))
+    empty = 10 - filled
+    bar = "🟩" * filled + "⬜️" * empty
+    
+    text = f"⏳ <b>{title}</b>\n<code>{bar}  {percentage}%</code>"
+    edit_telegram_message(chat_id, message_id, text, use_html=True)
+
+
 def handle_message(chat_id: int, user_id: str, text: str, message: dict):
     """Обработка обычных сообщений, состояний ожидания и медиафайлов."""
+    status_message_id = None
     
     # Проверяем команду контекстного ИИ-дополнения "Дд " / "дд "
     raw_text = text.strip() if text else ""
@@ -111,7 +125,7 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
                 return
             
             redis_client.setex(lock_key, 3, "1")
-            status_id = send_initial_status_message(chat_id, "🔍 Поиск последней заметки...")
+            status_id = send_initial_status_message(chat_id, "⏳ <b>Поиск последней заметки...</b>\n<code>⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️  0%</code>", use_html=True)
             
             try:
                 latest_notes = get_latest_notes(1)
@@ -124,19 +138,19 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
                 title_parts = note.get('properties', {}).get('Name', {}).get('title', [])
                 page_title = title_parts[0]['plain_text'] if title_parts else "Без названия"
                 
-                edit_telegram_message(chat_id, status_id, f"📝 Чтение заметки *{page_title}*...")
+                update_status(chat_id, status_id, f"Чтение заметки {page_title}...", 25)
                 old_content = get_notion_page_content(page_id)
                 
-                edit_telegram_message(chat_id, status_id, f"✨ Интеграция новой информации с ИИ...")
+                update_status(chat_id, status_id, "Интеграция с ИИ...", 50)
                 new_content = integrate_contextually(old_content, command_body)
                 
                 # Сохраняем оригинальный контент перед перезаписью!
                 log_last_action(user_id=user_id, action='edit', notion_page_id=page_id, old_markdown=old_content)
                 
-                edit_telegram_message(chat_id, status_id, f"💾 Сохранение изменений в Notion...")
+                update_status(chat_id, status_id, "Сохранение в Notion...", 75)
                 replace_page_content(page_id, new_content)
                 
-                # Запускаем Pinecone-векторизацию в фоновом потоке
+                update_status(chat_id, status_id, "Векторизация...", 90)
                 try:
                     import threading
                     full_text_for_embedding = f"Заголовок: {page_title}\nСодержимое: {new_content}"
@@ -560,12 +574,17 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
             return
         
         # Обычный режим — заметка через AI
-        send_telegram_message(chat_id, "⏳ Распознаю речь...")
+        status_message_id = send_initial_status_message(chat_id, "⏳ <b>Запускаю распознавание...</b>\n<code>⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️  0%</code>", use_html=True)
+        update_status(chat_id, status_message_id, "Загрузка аудио...", 10)
         audio_bytes = download_telegram_file(audio_file_id).read()
+        update_status(chat_id, status_message_id, "Распознавание речи...", 20)
         transcript_data = transcribe_with_assemblyai(audio_bytes)
         text_to_process = transcript_data.get('text') if transcript_data else None
         if not text_to_process: 
-            send_telegram_message(chat_id, "❌ Не удалось распознать речь.")
+            if status_message_id:
+                edit_telegram_message(chat_id, status_message_id, "❌ <b>Не удалось распознать речь.</b>", use_html=True)
+            else:
+                send_telegram_message(chat_id, "❌ Не удалось распознать речь.")
             return
             
     elif 'text' in message:
@@ -574,10 +593,10 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
 
     # 6. Обработка извлеченного текста (Notion + Календарь)
     if text_to_process:
-        status_message_id = None
-        if is_text_message:
-            status_message_id = send_initial_status_message(chat_id, "⏳ Записываю заметку...")
+        if status_message_id is None:
+            status_message_id = send_initial_status_message(chat_id, "⏳ <b>Запускаю обработку...</b>\n<code>⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️  0%</code>", use_html=True)
         
+        update_status(chat_id, status_message_id, "Анализирую текст ИИ...", 35)
         ai_data = process_with_ai(text_to_process)
         notion_title = ai_data.get('main_title', 'Новая заметка')
         notion_category = ai_data.get('category', 'Мысль')
@@ -591,9 +610,7 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
         
         # --- РЕЖИМ ТОЛЬКО НАПОМИНАНИЕ (без Notion) ---
         if is_reminder_only and valid_events:
-            if status_message_id:
-                progress_bar = "🟩🟩🟩🟩🟩🟩 99%"
-                edit_telegram_message(chat_id, status_message_id, f"⏳ Добавляю в календарь...\n`{progress_bar}`")
+            update_status(chat_id, status_message_id, "Добавляю в календарь...", 80)
             
             created_events_info = []  # [(title, datetime_iso), ...]
             created_events_links = []
@@ -637,20 +654,16 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
 
         notion_page_id = None
         try:
+            update_status(chat_id, status_message_id, "Создаю страницу в Notion...", 55)
             notion_page_id = create_notion_page(notion_title, formatted_body, notion_category)
             if notion_page_id: 
                 log_last_action(notion_page_id=notion_page_id)
                 for photo_url in photo_urls:
                     try:
+                        update_status(chat_id, status_message_id, "Добавляю фото в Notion...", 70)
                         add_image_to_page(notion_page_id, photo_url)
                     except Exception as img_err:
                         print(f"Ошибка добавления фото: {img_err}")
-            if not is_text_message:
-                send_telegram_message(
-                    chat_id, 
-                    f"✅ *Заметка в Notion создана!*\n\n*Название:* {notion_title}\n*Категория:* {notion_category}", 
-                    add_undo_button=True
-                )
         except Exception as e:
             detailed_error = e.response.text if hasattr(e, 'response') else str(e)
             err_msg_lower = str(e).lower()
@@ -675,6 +688,7 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
         created_events_titles = []
         created_events_links = []
         if valid_events:
+            update_status(chat_id, status_message_id, "Добавляю события в календарь...", 80)
             for event in valid_events:
                 try:
                     gcal_result = create_google_calendar_event(
@@ -688,6 +702,8 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
                     created_events_titles.append(event['title'])
                 except Exception as e:
                     send_telegram_message(chat_id, f"❌ *Ошибка при создании события '{event['title']}':*\n`{e}`")
+        
+        update_status(chat_id, status_message_id, "Индексирую для поиска...", 95)
         
         # Очищаем превью от Markdown и HTML-тегов для обеспечения совместимости с парсером Telegram
         clean_preview = formatted_body
