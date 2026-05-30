@@ -199,12 +199,17 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
                     send_telegram_message(chat_id, "😔 Ничего не найдено.", show_keyboard=True)
                 else:
                     context = ""
+                    errors = []
                     for page_id in found_ids:
                         try:
                             page_content = get_notion_page_content(page_id)
                             page_title = page_content.split('\n', 1)[0] if page_content else "Без названия"
                             context += f"--- Текст из заметки '{page_title}' ---\n{page_content}\n\n"
                         except Exception as e:
+                            err_desc = f"Page `{page_id}`: `{e}`"
+                            if hasattr(e, 'response') and e.response is not None:
+                                err_desc += f" (Status: `{e.response.status_code}`, Body: `{e.response.text[:100]}`)"
+                            errors.append(err_desc)
                             print(f"Не удалось получить контент для страницы {page_id}: {e}")
                             if hasattr(e, 'response') and e.response is not None:
                                 if getattr(e.response, 'status_code', None) in (400, 403, 404):
@@ -218,7 +223,8 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
                         answer = summarize_for_search(context, query)
                         send_telegram_message(chat_id, f"💡 *Вот что я нашел:*\n\n{answer}", show_keyboard=True)
                     else:
-                        send_telegram_message(chat_id, "🤔 Нашел заметки, но не смог прочитать.", show_keyboard=True)
+                        err_text = "\n".join(errors)
+                        send_telegram_message(chat_id, f"🤔 Нашел заметки, но не смог прочитать.\n\n*Ошибки:*\n{err_text}", show_keyboard=True)
             else:
                 send_telegram_message(chat_id, "Отмена. Пустой запрос.")
             set_user_state(user_id, None, None)

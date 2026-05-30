@@ -197,12 +197,17 @@ def handle_command(chat_id: int, user_id: str, text: str, message: dict) -> bool
             return True
 
         context = ""
+        errors = []
         for page_id in found_ids:
             try:
                 page_content = get_notion_page_content(page_id)
                 page_title = page_content.split('\n', 1)[0] if page_content else "Без названия"
                 context += f"--- Текст из заметки '{page_title}' ---\n{page_content}\n\n"
             except Exception as e:
+                err_desc = f"Page `{page_id}`: `{e}`"
+                if hasattr(e, 'response') and e.response is not None:
+                    err_desc += f" (Status: `{e.response.status_code}`, Body: `{e.response.text[:100]}`)"
+                errors.append(err_desc)
                 print(f"Не удалось получить контент для страницы {page_id}: {e}")
                 if hasattr(e, 'response') and e.response is not None:
                     if getattr(e.response, 'status_code', None) in (400, 403, 404):
@@ -213,7 +218,8 @@ def handle_command(chat_id: int, user_id: str, text: str, message: dict) -> bool
                             print(f"Не удалось очистить Pinecone для {page_id}: {pe}")
 
         if not context:
-            send_telegram_message(chat_id, "🤔 Нашел подходящие заметки, но не смог прочитать их содержимое.")
+            err_text = "\n".join(errors)
+            send_telegram_message(chat_id, f"🤔 Нашел подходящие заметки, но не смог прочитать их содержимое.\n\n*Ошибки:*\n{err_text}")
             return True
 
         answer = summarize_for_search(context, query)
