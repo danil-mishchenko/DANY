@@ -220,6 +220,47 @@ def handle_command(chat_id: int, user_id: str, text: str, message: dict) -> bool
         final_response = f"💡 *Вот что я нашел по вашему запросу:*\n\n{answer}"
         send_telegram_message(chat_id, final_response)
         return True
+
+    elif text_clean.startswith('/debug_search '):
+        query = text_clean.split(' ', 1)[1]
+        if not query:
+            send_telegram_message(chat_id, "Пожалуйста, укажите запрос.")
+            return True
+            
+        send_telegram_message(chat_id, f"🔍 [DEBUG] Ищу по смыслу: '{query}'...")
+        try:
+            from services.pinecone_svc import query_pinecone
+            found_ids = query_pinecone(query, top_k=6)
+            report = f"🔍 [DEBUG] Pinecone вернул {len(found_ids)} ID:\n`{found_ids}`\n\n"
+        except Exception as pe:
+            send_telegram_message(chat_id, f"❌ [DEBUG] Ошибка Pinecone: {pe}")
+            return True
+            
+        if not found_ids:
+            send_telegram_message(chat_id, report + "😔 Ничего не найдено.")
+            return True
+            
+        for i, page_id in enumerate(found_ids):
+            report += f"📄 *[{i+1}] ID: `{page_id}`*\n"
+            try:
+                title = get_page_title(page_id)
+                report += f"• Название: `{title}`\n"
+            except Exception as e:
+                report += f"• Ошибка названия: `{e}`\n"
+                
+            try:
+                content = get_notion_page_content(page_id)
+                report += f"• Длина контента: `{len(content)}` симв.\n"
+                report += f"• Превью: `{content[:100]}...`\n"
+            except Exception as e:
+                report += f"• Ошибка контента: `{e}`\n"
+                if hasattr(e, 'response') and e.response is not None:
+                    report += f"  - Status: `{e.response.status_code}`\n"
+                    report += f"  - Body: `{e.response.text[:200]}`\n"
+            report += "\n"
+            
+        send_telegram_message(chat_id, report)
+        return True
         
     # 11. /undo
     elif text_clean == '/undo':
