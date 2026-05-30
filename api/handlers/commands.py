@@ -421,14 +421,14 @@ def handle_command(chat_id: int, user_id: str, text: str, message: dict) -> bool
             
         # 9. Генерация ответа ИИ
         answer = summarize_for_search(context, query)
-        final_response = f"💡 *Вот что я нашел по вашему запросу:*\n\n{answer}"
+        final_response = f"💡 <b>Вот что я нашел по вашему запросу:</b>\n\n{answer}"
         
         # Группируем кнопки-источники в ряды по 2 кнопки
         inline_buttons = []
         for i in range(0, len(source_buttons), 2):
             inline_buttons.append(source_buttons[i:i+2])
             
-        send_message_with_buttons(chat_id, final_response, inline_buttons)
+        send_message_with_buttons(chat_id, final_response, inline_buttons, use_html=True)
         return True
 
     elif text_clean.startswith('/debug_search '):

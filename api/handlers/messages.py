@@ -399,7 +399,7 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
                         for i in range(0, len(source_buttons), 2):
                             inline_buttons.append(source_buttons[i:i+2])
                             
-                        send_message_with_buttons(chat_id, f"💡 *Вот что я нашел по вашему запросу:*\n\n{answer}", inline_buttons)
+                        send_message_with_buttons(chat_id, f"💡 <b>Вот что я нашел по вашему запросу:</b>\n\n{answer}", inline_buttons, use_html=True)
                     else:
                         err_text = "\n".join(errors)
                         send_telegram_message(chat_id, f"🤔 Нашел подходящие заметки, но не смог прочитать их содержимое.\n\n*Ошибки:*\n{err_text}", show_keyboard=True)
