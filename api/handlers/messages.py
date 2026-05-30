@@ -19,7 +19,9 @@ from services.notion import (
     get_notion_page_content,
     get_page_title,
     get_page_preview,
-    rename_page
+    rename_page,
+    replace_page_content,
+    get_latest_notes
 )
 from services.calendar import create_google_calendar_event
 from services.state import (
@@ -38,9 +40,10 @@ from services.ai import (
     transcribe_with_assemblyai,
     clean_transcript,
     process_with_ai,
-    summarize_for_search
+    summarize_for_search,
+    integrate_contextually
 )
-from services.pinecone_svc import query_pinecone
+from services.pinecone_svc import query_pinecone, upsert_to_pinecone, delete_from_pinecone
 
 def format_with_timecodes(words: list) -> str:
     """Группирует слова из AssemblyAI в абзацы по предложениям и добавляет таймкоды."""
@@ -101,9 +104,6 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
             status_id = send_initial_status_message(chat_id, "🔍 Поиск последней заметки...")
             
             try:
-                from services.notion import get_latest_notes, replace_page_content, get_notion_page_content, get_page_title
-                from services.ai import integrate_contextually
-                
                 latest_notes = get_latest_notes(1)
                 if not latest_notes:
                     edit_telegram_message(chat_id, status_id, "❌ Не найдено ни одной заметки для дополнения.")
@@ -129,7 +129,6 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
                 # Запускаем Pinecone-векторизацию в фоновом потоке
                 try:
                     import threading
-                    from services.pinecone_svc import upsert_to_pinecone
                     full_text_for_embedding = f"Заголовок: {page_title}\nСодержимое: {new_content}"
                     t = threading.Thread(target=upsert_to_pinecone, args=(page_id, full_text_for_embedding))
                     t.daemon = True
@@ -214,7 +213,6 @@ def handle_message(chat_id: int, user_id: str, text: str, message: dict):
                             if hasattr(e, 'response') and e.response is not None:
                                 if getattr(e.response, 'status_code', None) in (400, 403, 404):
                                     try:
-                                        from services.pinecone_svc import delete_from_pinecone
                                         delete_from_pinecone(page_id)
                                     except Exception as pe:
                                         print(f"Не удалось очистить Pinecone для {page_id}: {pe}")

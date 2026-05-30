@@ -16,7 +16,8 @@ from services.notion import (
 )
 from services.pinecone_svc import (
     upsert_to_pinecone,
-    query_pinecone
+    query_pinecone,
+    delete_from_pinecone
 )
 from services.state import (
     get_last_created_page_id,
@@ -212,7 +213,6 @@ def handle_command(chat_id: int, user_id: str, text: str, message: dict) -> bool
                 if hasattr(e, 'response') and e.response is not None:
                     if getattr(e.response, 'status_code', None) in (400, 403, 404):
                         try:
-                            from services.pinecone_svc import delete_from_pinecone
                             delete_from_pinecone(page_id)
                         except Exception as pe:
                             print(f"Не удалось очистить Pinecone для {page_id}: {pe}")
@@ -235,7 +235,6 @@ def handle_command(chat_id: int, user_id: str, text: str, message: dict) -> bool
             
         send_telegram_message(chat_id, f"🔍 [DEBUG] Ищу по смыслу: '{query}'...")
         try:
-            from services.pinecone_svc import query_pinecone
             found_ids = query_pinecone(query, top_k=6)
             report = f"🔍 [DEBUG] Pinecone вернул {len(found_ids)} ID:\n`{found_ids}`\n\n"
         except Exception as pe:
