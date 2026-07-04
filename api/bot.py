@@ -112,7 +112,24 @@ class handler(BaseHTTPRequestHandler):
         except Exception as e:
             if chat_id:
                 try:
-                    send_telegram_message(chat_id, f"🤯 *Произошла глобальная ошибка!*\nПожалуйста, проверьте логи Vercel.\n`{e}`")
+                    err_msg = str(e)
+                    err_msg_lower = err_msg.lower()
+                    if "429" in err_msg_lower or "insufficient_quota" in err_msg_lower or "rate_limit" in err_msg_lower:
+                        friendly_msg = (
+                            "⚠️ <b>Превышена квота или лимит запросов OpenAI!</b>\n\n"
+                            "Пожалуйста, проверьте статус оплаты и баланс вашего аккаунта OpenAI "
+                            "в личном кабинете (раздел Billing).\n"
+                            "Если баланс положительный, возможно, вы временно превысили лимит запросов в минуту (RPM/TPM)."
+                        )
+                        send_telegram_message(chat_id, friendly_msg, use_html=True)
+                    elif "401" in err_msg_lower or "invalid_api_key" in err_msg_lower:
+                        friendly_msg = (
+                            "⚠️ <b>Ошибка авторизации OpenAI!</b>\n\n"
+                            "Пожалуйста, проверьте правильность вашего API-ключа (OPENAI_API_KEY) в настройках проекта Vercel."
+                        )
+                        send_telegram_message(chat_id, friendly_msg, use_html=True)
+                    else:
+                        send_telegram_message(chat_id, f"🤯 *Произошла глобальная ошибка!*\nПожалуйста, проверьте логи Vercel.\n`{e}`")
                 except Exception as tg_err:
                     print(f"Не удалось отправить TG-сообщение об ошибке: {tg_err}")
             print(f"Произошла глобальная ошибка: {e}")

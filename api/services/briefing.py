@@ -11,6 +11,7 @@ from utils.config import (
 )
 from services.clickup import get_my_tasks, _escape_markdown, PRIORITY_EMOJI
 from services.state import get_hidden_tasks
+from services.ai import _openai_post_with_retry
 
 
 
@@ -153,8 +154,7 @@ def generate_personal_insight(tasks: list, events: list) -> str:
             "temperature": 0.9
         }
 
-        response = requests.post(url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
-        response.raise_for_status()
+        response = _openai_post_with_retry(url, headers=headers, json_data=payload, timeout=DEFAULT_TIMEOUT)
         insight = response.json()['choices'][0]['message']['content'].strip()
         return _escape_markdown(insight)
     except Exception as e:

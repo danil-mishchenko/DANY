@@ -68,6 +68,63 @@ def transcribe_with_assemblyai(audio_file_bytes) -> str:
     return None
 
 
+def _openai_post_with_retry(url: str, headers: dict, json_data: dict, timeout=DEFAULT_TIMEOUT):
+    """Отправляет POST запрос к OpenAI с автоматическим повтором при временных ошибках (429, 5xx)."""
+    max_retries = 3
+    backoff = 1.5
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(url, headers=headers, json=json_data, timeout=timeout)
+            
+            # Если получили 429, проверяем тип ошибки
+            if response.status_code == 429:
+                try:
+                    err_json = response.json()
+                    err_type = err_json.get('error', {}).get('type', '')
+                    err_code = err_json.get('error', {}).get('code', '')
+                    # Если превышена общая квота аккаунта, ретрай бесполезен
+                    if err_type == 'insufficient_quota' or err_code == 'insufficient_quota':
+                        response.raise_for_status()
+                except Exception:
+                    pass
+                
+                # При временном RPM/TPM ограничении делаем паузу и повторяем
+                if attempt < max_retries - 1:
+                    print(f"[ai.py] Получен статус 429 (Rate Limit). Повторная попытка {attempt + 2} через {backoff} сек...")
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+            
+            # Если получили 5xx ошибку сервера, повторяем
+            if response.status_code >= 500:
+                if attempt < max_retries - 1:
+                    print(f"[ai.py] Получен статус {response.status_code} (Server Error). Повторная попытка {attempt + 2} через {backoff} сек...")
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+            
+            response.raise_for_status()
+            return response
+        except requests.exceptions.RequestException as e:
+            if attempt == max_retries - 1:
+                raise e
+            
+            status_code = getattr(e.response, 'status_code', None) if e.response is not None else None
+            # Ретраим только на 5xx ошибки или таймауты
+            if status_code and status_code >= 500:
+                print(f"[ai.py] Сетевая ошибка {status_code}. Повторная попытка через {backoff} сек...")
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            elif isinstance(e, requests.exceptions.Timeout):
+                print(f"[ai.py] Таймаут соединения. Повторная попытка через {backoff} сек...")
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            else:
+                raise e
+
+
 def summarize_transcript(text: str) -> str:
     """Генерирует краткую выжимку из длинного транскрипта (Feature 6)."""
     url = "https://api.openai.com/v1/chat/completions"
@@ -155,8 +212,7 @@ def process_with_ai(text: str) -> dict:
     Заметка: --- {text} ---
     """
     data = {"model": "gpt-5.4-nano", "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}}
-    response = requests.post(url, headers=headers, json=data, timeout=(3.0, 5.0))
-    response.raise_for_status()
+    response = _openai_post_with_retry(url, headers=headers, json_data=data, timeout=(3.0, 5.0))
     ai_response = response.json()
     # Валидация ответа AI
     if not ai_response.get('choices') or not ai_response['choices'][0].get('message'):
@@ -205,8 +261,7 @@ def summarize_for_search(context: str, question: str) -> str:
         "temperature": 0.3
     }
     
-    response = requests.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT)
-    response.raise_for_status()
+    response = _openai_post_with_retry(url, headers=headers, json_data=data, timeout=DEFAULT_TIMEOUT)
     return response.json()['choices'][0]['message']['content']
 
 
@@ -256,8 +311,7 @@ def polish_content(old_content: str, new_content: str) -> str:
         ]
     }
     
-    response = requests.post(url, headers=headers, json=data, timeout=(3.0, 5.0))
-    response.raise_for_status()
+    response = _openai_post_with_retry(url, headers=headers, json_data=data, timeout=(3.0, 5.0))
     return response.json()['choices'][0]['message']['content']
 
 
@@ -294,8 +348,7 @@ def clean_transcript(raw_text: str) -> str:
         ]
     }
     
-    response = requests.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT)
-    response.raise_for_status()
+    response = _openai_post_with_retry(url, headers=headers, json_data=data, timeout=DEFAULT_TIMEOUT)
     return response.json()['choices'][0]['message']['content']
 
 
@@ -346,8 +399,7 @@ def integrate_contextually(old_content: str, new_text: str) -> str:
         ]
     }
     
-    response = requests.post(url, headers=headers, json=data, timeout=(5.0, 15.0))
-    response.raise_for_status()
+    response = _openai_post_with_retry(url, headers=headers, json_data=data, timeout=(5.0, 15.0))
     result = response.json()['choices'][0]['message']['content'].strip()
     
     # Постобработка: удаляем обрамляющие блоки кода ```markdown или ``` если ИИ их все-таки вернул
@@ -389,8 +441,7 @@ def expand_search_query(query: str) -> list:
     }
     
     try:
-        response = requests.post(url, headers=headers, json=data, timeout=DEFAULT_TIMEOUT)
-        response.raise_for_status()
+        response = _openai_post_with_retry(url, headers=headers, json_data=data, timeout=DEFAULT_TIMEOUT)
         text = response.json()['choices'][0]['message']['content'].strip()
         
         # Парсим через запятые
